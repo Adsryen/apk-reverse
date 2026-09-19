@@ -193,6 +193,39 @@ Three rules that follow:
 - **Prefer a bounded observable over a fixed sleep.** Poll the state you actually care about, with a
   cap — and prefer a sample you can inspect over a duration you hope is right.
 
+## Keep the observation window clean
+
+Every conclusion in this skill rests on "the build I am looking at is the build I made". That
+assumption is silently false more often than any other, and a contaminated window does not look
+contaminated — it looks like a result.
+
+Three ways it happens, all of which have produced confidently wrong findings:
+
+- **Something else touched the target while you were observing.** Another process, another agent,
+  another window of your own work installed, reverted, restored or cleared the app. Your screenshots
+  and logs are then a mixture of two states and describe neither.
+- **You are looking at a stale process.** The app was never actually restarted, so the "before" and
+  "after" captures come from the same run.
+- **The artifact on the device is not the artifact on disk.** An install that reported success, or was
+  skipped because the version matched, leaves the previous build running.
+
+Guards, in order of cost:
+
+1. **Pin the identity, not the filename.** Hash the artifact you built, hash the artifact you intend
+   to test, and hash what is actually installed (pull the installed APK or read its digest) — the
+   filename proves nothing. Do this immediately before the observation window, not hours earlier.
+2. **Take the window deliberately.** Before a capture sequence that a conclusion will rest on, state
+   (to yourself or in the record) that the next N seconds are for this observation only, and do not
+   run another install/uninstall/clear inside it.
+3. **Timestamp the window.** Record the wall-clock start and end. It costs one line and it is the only
+   way to later notice that a teammate, a background job or your own earlier command landed inside it.
+4. **Prefer one continuous capture over several short ones.** A restarted capture invites a restarted
+   state; a single sequence cannot straddle an install it did not perform.
+
+When you discover a window was contaminated, **the correct action is to discard it and re-capture**,
+not to salvage it. A re-run costs minutes; a wrong conclusion costs the rest of the task, and it will
+be re-derived from the same bad evidence because the record says it was observed.
+
 ## Handover
 
 A handover is the record plus three things, written for someone with **no** memory of the task:

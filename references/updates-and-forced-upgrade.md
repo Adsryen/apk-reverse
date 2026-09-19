@@ -165,6 +165,69 @@ Update suppression changes behaviour a user can observe ("it never tells me abou
 in the delivery notes, in one line, together with anything else you neutralised. If the app also has a
 legitimate reason to update (security fixes), say that the build will not pick them up automatically.
 
+## Step 6: when the check is not where you expect
+
+Three shapes that break the "find the Java comparison and flip it" plan. Recognise them early,
+because each has a different cheapest remedy.
+
+### The check is native
+
+Symptom: you grep the whole dex tree for the version-comparison routine, the update endpoint, or the
+dialog text and find **the method declared, and zero callers**. A `static native` update entry point
+with no Java caller means the invocation lives in a `.so` (`registerNatives` from a static block is
+the usual giveaway — see `code-virtualization-and-custom-linkers.md`).
+
+Options, cheapest first:
+
+1. **Attack the response, not the check.** Block or rewrite the update endpoint at the network layer,
+   or empty the version/config response. The native code still runs and still decides "no update".
+   This needs no native work at all and survives a rebuild — check this before reaching for a
+   disassembler.
+2. **Send the check a version it likes.** If it compares against a value the app itself supplies
+   (a config key, a stored preference, a build field), setting that value is a one-line change.
+3. **Patch the native comparison.** Last, because it is the most expensive and the most fragile.
+
+Do not conclude "unpatchable" from "no Java caller". The gate usually reads a value you *can* control.
+
+### The update hands off to a browser or a WebView
+
+Very common in this category: the dialog's button fires an `ACTION_VIEW` intent at a download URL,
+or loads it in an in-app WebView. Two consequences:
+
+- **You will not find an installer call** in the app, so searching for `PackageInstaller`,
+  `REQUEST_INSTALL_PACKAGES` or a download service finds nothing. That is not evidence the dialog is
+  harmless; the browser does the install.
+- **Logcat truncates the URL.** `ActivityTaskManager` prints `dat=https://host/...` and elides the
+  rest, so a naive grep gives you a host and no path. Do not build a plan on a truncated URL.
+
+Ways to get the real URL, cheapest first:
+
+| Approach | Notes |
+|---|---|
+| Hook `Intent` construction / `Context.startActivity` and log `intent.getDataString()` | Most reliable. A truncated log line is a *logging* limit, not a limit on what you can read |
+| `dumpsys activity activities` / recents while the browser is still in the stack | Free; works only if the activity is still alive |
+| The browser's own history database (root) | Survives the browser being closed; needs the right DB, and modern browsers may encrypt or prune it |
+| Read the update *response* instead | Often easier: the URL came from a JSON field you can fetch or hook directly |
+
+**Deliberately tapping the button is a legitimate probe** — but treat it as a measurement, not a
+side effect: capture the intent (or the screen) in the same window, and know that on some devices a
+second tap resumes an already-started download rather than re-issuing the intent.
+
+### The gate is server-issued with a local fallback
+
+`fetchEnabled()`-style helpers frequently **default to a local value on any failure** (non-200,
+timeout, malformed body, signature mismatch). Two things follow:
+
+- **Read the failure branch before you touch anything.** If failure ⇒ "no update" or "no ad", then
+  merely making the request fail is a complete fix, and it is far cheaper and more robust than
+  patching the comparison.
+- **The fallback also tells you how to test offline.** Disconnect the device and relaunch: if the
+  gate disappears, the fallback is benign and you have a zero-code workaround as well as a
+  verification signal.
+
+Conversely, if failure ⇒ "must update", failing the request makes things worse, and you must patch the
+decision instead.
+
 ## Checklist
 
 - [ ] Update vocabulary searched in **both** string encodings, in the right layer for the runtime
