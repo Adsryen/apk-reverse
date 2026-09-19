@@ -29,6 +29,12 @@ directly.
 SKILL.md                  decision tree, workflow, hard constraints, indexes
 references/               loaded on demand, one topic each
   recon.md                    identify packer, SDKs, code location, tamper checks; unpacking
+  packers.md                  hardened targets: rejection signals, measuring the validation
+                              boundary with single-variable tests, choosing a native host
+  framework-runtimes.md       Flutter / React Native / Unity: which layer owns the UI
+  native-and-so.md            .so hosts, DT_NEEDED vs JNI_OnLoad, relocation limits,
+                              relocation-free bootstrapping, replacing Java methods natively
+  long-task-discipline.md     live record, conclusion grading, drift control, handover
   ad-removal.md               ad taxonomy, wrapper mapping, callback trap, global gates, verification
   membership-and-limits.md    server vs client authority; what is and is not patchable
   server-api.md               probe an app's API; prove who owns the gate

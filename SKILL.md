@@ -25,7 +25,8 @@ Answer these before touching a tool. Every one of them changes the whole plan.
    - Feature flag, UI gate, debug switch → usually client-side
    - Anything decided by an API response → server-side → `references/server-api.md`
 3. **Is the app's own code in plain dex, or moved to native/Flutter/Unity?**
-   Plain dex → you can patch. Flutter (`libflutter.so` + `libapp.so`) / Unity (`libil2cpp.so`) / pure native → different toolchain entirely. See `references/recon.md` §code-location.
+   Plain dex → you can patch. Flutter (`libflutter.so` + `libapp.so`) / Unity (`libil2cpp.so`) / pure native → different toolchain entirely. See `references/recon.md` §code-location and `references/framework-runtimes.md`.
+      **Runtime check (cheap -- do it before committing to a layer):** hook the obvious Java classes for the UI you care about, then reproduce that UI. If those hooks fire, the behavior is Java-owned. If they fire **zero times** while the UI is plainly on screen, the behavior is drawn by the runtime or by native code, and a dex-only plan will stall. Do not keep hunting in dex after a zero-hit probe -- that is the most expensive wrong turn in this skill's history.
 4. **Does the app verify its own signature, or does the server?**
    App-side → you must bypass it. Server-side → re-signing silently breaks the app later. See `references/repack-and-sign.md` and `references/server-api.md`.
 5. **What is your device situation?** → `references/environment.md`
@@ -35,6 +36,11 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 7. **Was the input a build you did not produce** (a "cracked"/"modded" APK circulating online)?
    → `references/third-party-builds.md`. Audit it before adopting it: such builds are frequently re-protected (sometimes with *more* layers than the original) and may carry injected components or endpoints. Never use one as a patching workbench.
 
+   **Long-task rule:** if this is likely to run long, open `references/long-task-discipline.md` now
+   and keep its record updated as you go. Re-read the refuted-conclusions and dead-routes sections
+   before starting any new experiment. Losing earlier findings is the most expensive failure in this
+   skill, and it is entirely preventable.
+
 ## The workflow, end to end
 
 1. **Recon** — `references/recon.md`. Manifest, package name, version, ABI, dex count, packer, embedded SDKs, where the app's own code lives. Ten minutes here saves hours. **If it is packed, unpack before anything else** (`references/recon.md` §unpacking): you cannot patch code you cannot read, the encrypted payload lengths tell you which dumped dex is the original, and a memory dump must be de-duplicated by hash and structurally validated before any of it is trusted.
@@ -43,7 +49,7 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 4. **Decide the patch layer** — client SDK call / client rendering / client data consumption / server contract. See the table in `references/ad-removal.md`.
 5. **Patch surgically** — `references/dex-patching.md`. Prefer **dexlib2 method-level rewriting** over whole-tree smali round-trip. Whole-tree round-trip damages R8-optimized dex in ways that only show up at runtime.
 6. **Repack and sign** — `references/repack-and-sign.md`. **Do not strip the whole `META-INF/`.** This single mistake destroys otherwise-correct builds.
-7. **Verify on device** — `references/environment.md` + `references/verification.md`. Check: launches, no logcat exception, the changed behavior actually changed, and nothing unrelated broke.
+7. **Verify on device** — `references/environment.md` + `references/verification.md`. Check: launches, the changed behavior actually changed, nothing unrelated broke, and **the app reaches its normal UI with no blocking dialog**. First prove the artifact actually changed on the device -- a package manager reporting success does not prove an interposed confirmation was accepted (P18). Capture continuously for the first ~20 seconds after launch; sampling gaps are how a blocking modal goes unseen (P20).
 8. **Log what you learned** — if a failure cost you more than thirty minutes, add it to `references/pitfalls.md`. That file is the most valuable artifact in this skill.
 
 ## Non-negotiable constraints
@@ -54,6 +60,9 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 - **Do not patch a method that is widely shared.** Before patching any helper, count its callers (`scripts/find_refs.py`). A `Long.valueOf` wrapper with 30 callers is not an ad-specific hook.
 - **Do not make an API fail to suppress a UI element.** A 404/400 on an endpoint that other features depend on takes the whole screen down with it. Suppress at the data-consumption or render layer instead.
 - **Every claim needs evidence.** "Probably", "should be", "in theory" are not findings. Either you observed it, or you label it unverified.
+   - **"Done" means the user-visible outcome**, not an internal signal. A blocking dialog still on screen means the task is not done, however many errors disappeared from the log. Absence of a log line is absence of evidence, never evidence of success.
+   - **Do not discard a route on compound evidence.** If a failure followed two simultaneous changes, the attribution is a hypothesis, not a finding. Re-run it single-variable before writing the route off -- mis-attributed failures have removed viable approaches for a long time.
+   - **Prove the device changed before measuring.** Install success describes the request, not the app on disk. Confirm the artifact actually advanced, or every following observation describes the previous build.
 - **Attribute a failure to the right layer before patching again.** When something stops working after a rebuild, first check whether the **unmodified original** fails the same way on the same device and network. Feature-scoped network failures in particular are frequently the app's own TLS/certificate problem (`references/tls-and-cert.md`); chasing a signature check that does not exist burns hours.
 
 ## Reference index
@@ -63,6 +72,9 @@ Load only what the current step needs.
 | File | Load when |
 |---|---|
 | `references/recon.md` | Starting any new sample; identifying packer, SDKs, code location, ABI |
+| `references/packers.md` | The app is packed/hardened, or an edit makes it die before your code runs. Also load before discarding any route as "blocked by the shell" |
+| `references/framework-runtimes.md` | The UI is not native (Flutter / React Native / Unity / Cordova), or Java-layer hooks fire zero times while the UI clearly works |
+| `references/native-and-so.md` | Patching in a `.so`, needing code to run before the app's own code, or hand-built native payloads that crash inside the linker |
 | `references/ad-removal.md` | Task involves ads, trackers, sponsored cards, splash/interstitial/reward |
 | `references/membership-and-limits.md` | Task involves VIP, subscription, paid content, unlock, "fully cracked" |
 | `references/server-api.md` | The behavior is decided by a response, or you need to know if a patch can even matter |
@@ -74,6 +86,7 @@ Load only what the current step needs.
 | `references/verification.md` | Defining what "done" means; building the evidence chain |
 | `references/tls-and-cert.md` | One feature fails at runtime (login, registration, payment, an API-backed screen) while the rest of the app works |
 | `references/third-party-builds.md` | The input is a "cracked"/"modded" build you did not produce — audit it before trusting it |
+| `references/long-task-discipline.md` | The task will run long, or you are resuming one. Live record, conclusion grading, drift checkpoints, handover |
 | `references/pitfalls.md` | Always worth a skim before building. This is the failure catalogue. |
 
 ## Script index

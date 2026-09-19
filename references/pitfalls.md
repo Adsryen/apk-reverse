@@ -359,3 +359,137 @@ All of these produce the same observable: nothing happens. A zero-byte screensho
 - Compare field values, not just presence — one case that burned an hour was two password fields of different length, causing local validation to `return` before any network call.
 - Treat "no visible change" as unproven, not as a negative result: confirm with an independent signal (logcat, a runtime probe, or a server-side request appearing in the capture).
 - If a tap does not register, fall back to launching the Activity directly or invoking the handler, rather than retrying coordinates.
+
+---
+
+## P18. The package manager reported success, but the build was never installed
+
+**Symptom**
+Every install logs `Success`, so you run the next experiment and read its result — but the app being
+tested is still the previous build. Screenshots show stale UI or the launcher, and results look
+"unchanged".
+
+**Root cause**
+On many ROMs a package installer interposes its own confirmation. The install command can return success
+for the *request*, while the actual install waits on a prompt — sometimes a password or account
+confirmation — that nobody fills in. The app stays at its old version indefinitely.
+
+This is the most expensive failure in this skill's history: because the command "succeeded", the stale
+behaviour was measured across many rounds, and each measurement looked like a genuine negative result.
+
+**Why it is hard to see**
+The success signal is real; it just answers a different question than the one you asked. Nothing in a
+normal install/launch script distinguishes "installed" from "install requested".
+
+**Do instead**
+- After installing, **prove the artifact changed**: compare `dumpsys package <pkg> | grep -E 'versionName|lastUpdateTime'` before and after, or hash the on-device APK and compare it to what you built.
+- If a confirmation UI exists, drive it explicitly (type the credential, press the confirm control) and then re-verify.
+- Make the check a precondition of the run, not an afterthought: if the version did not change, **abort** rather than measuring.
+- Keep build artifacts named after the change they contain so a stale install is obvious from a screenshot.
+
+---
+
+## P19. Substituting an internal signal for the user-visible outcome
+
+**Symptom**
+An error disappears from the log, no crash is recorded, and you report the problem solved. The user
+immediately shows you the same problem still on screen.
+
+**Root cause**
+The internal signal and the user-visible outcome are different claims. Suppressing one error path does
+not remove the symptom if the symptom is produced by a **different** path — and a blocking dialog often
+is. The log going quiet proves that one code path was affected; it says nothing about whether the user's
+problem is gone.
+
+**Why it is hard to see**
+The signal is specific, measurable, and genuinely changed. It is a true statement being used to support a
+false one.
+
+**Do instead**
+- Define "done" as the **user-visible behaviour**: the blocking UI is gone, the app reaches its normal
+  screen, the feature works. Nothing else counts.
+- Treat the absence of a log line as absence of evidence, never as evidence of success.
+- When a symptom persists after an internal signal improves, assume there is **another** producer of the
+  symptom and go find it, rather than assuming your fix is merely incomplete.
+- Also verify the opposite direction: confirm the original symptom is reproducible **before** you patch,
+  so you know what disappearing would even look like.
+
+---
+
+## P20. "I did not capture it" treated as "it is not there"
+
+**Symptom**
+Screenshots taken every few seconds after launch show no blocking dialog, so the dialog is declared gone —
+then it turns out to be present the whole time.
+
+**Root cause**
+Sampling is not observation. A transient state that appears and is then covered (a second window, a
+navigation, a system prompt) can fall entirely between samples. The modal appears, gets occluded, and
+every frame you happened to take shows something else.
+
+**Why it is hard to see**
+The captures are real and consistently show the same thing, which feels like corroboration. Conviction
+grows with the number of frames, even though all of them share the same blind spot.
+
+**Do instead**
+- For anything time-sensitive, capture **continuously** (recording) or in a dense burst immediately after
+  launch, not on a fixed slow interval.
+- **Look at every frame**, not only at file sizes. A byte-size cluster that "looks familiar" is not a
+  reading.
+- State conclusions with their sampling: "not observed in N consecutive seconds of recording" is honest;
+  "does not occur" is not.
+- When something is reported present by a human who is looking at the screen, believe the screen. Your
+  capture gap is the more likely explanation.
+
+---
+
+## P21. Changing two things at once, then attributing the result
+
+**Symptom**
+A build fails, and you conclude that the mechanism you were most curious about is the culprit — then
+exclude it from consideration for a long time. Later, a clean experiment shows it was the other change
+all along.
+
+**Root cause**
+Two edits, one observation, no attribution. The failure is real; the explanation is invented. Worse, the
+invented explanation survives because it sounds plausible and no one re-tests it.
+
+**Why it is hard to see**
+The experiment "worked" in the sense that it produced a result. Acting on a wrong attribution feels
+exactly like acting on a right one until much later.
+
+**Do instead**
+- One variable per install-and-launch cycle. Where a combination is unavoidable, add a third run that
+  isolates each half.
+- Write the attribution into your notes **with the run that proves it**. An unproven cause is a
+  hypothesis; keep it labelled as one.
+- When a route is about to be discarded, re-check whether the evidence was actually single-variable. A
+  discarded route with compound evidence should be re-opened before being abandoned.
+- Prefer semantically inert controls (a change nothing reads) to prove "edits of this class are allowed"
+  separately from "this specific edit is allowed".
+
+---
+
+## P22. Waiting for something that requires a human to advance
+
+**Symptom**
+An automation loop polls for minutes or longer, waiting for a state that never arrives on its own. Time
+is consumed while nothing at all can change.
+
+**Root cause**
+The awaited state is gated on a human action — a consent prompt, a permission dialog, an installer
+confirmation, a captcha. No amount of waiting resolves it. Automated polling is the wrong instrument for
+a state whose transition is external.
+
+**Why it is hard to see**
+Polling is cheap-looking and the loop reports progress (timestamps, unchanged screenshots), which creates
+an impression of work being done.
+
+**Do instead**
+- Before waiting on a state, ask what would cause it to change. If the answer is "a person", stop waiting
+  and either perform the action programmatically or hand it back.
+- Bound every wait with a deadline and an explicit failure branch that **does something different**, not
+  just a longer timeout.
+- Detect stalls by change, not by elapsed time: if N consecutive samples are identical, break out.
+- Prefer driving the prompt to completion over waiting it out — the same prompt usually recurs, so
+  automating it once pays back immediately.
