@@ -30,6 +30,17 @@ Recompressing them produces builds that fail to install or misbehave.
 
 **5. Signing creates new `MANIFEST.MF`/`*.SF`/`*.RSA`.** That is expected — the check is that **no signature artifact from the ORIGINAL** survives, and **no non-signature entry was lost**.
 
+## Repacking an unpacked (de-shelled) app
+
+When the sample was packed, the dex you are about to patch came out of a memory dump while the APK still carries the shell. Build a **de-shelled base APK** first, then treat it as an ordinary APK for the rest of this document.
+
+1. **Assemble the base.** Start from the original APK: replace `classes*.dex` with the dumped real dexes, and delete the shell library under `lib/<abi>/` plus the encrypted `assets/` payloads. Strip **only** signature artifacts — `META-INF/*.SF|*.RSA|*.DSA|*.EC` and the top-level `MANIFEST.MF`. Never delete the whole `META-INF/` (`references/pitfalls.md` P1).
+2. **Decode with `apktool`.** `apktool d base.apk` gives the smali tree and a **readable text manifest**.
+3. **Fix the manifest.** Point `application android:name` at the app's real Application class and **remove** `android:appComponentFactory`. Grep the decoded tree for leftover shell class references before building.
+4. **Patch, then rebuild.** `apktool b` → `zipalign -p -f 4` → `apksigner` (v1+v2+v3) → install and verify against the checklist at the end of this file.
+
+Why `apktool` rather than editing binary AXML in place: changing `android:name` in binary AXML means hand-editing the string pool and the attribute/chunk sizes around it, and a mis-sized chunk produces an APK that installs but throws far from the edit, typically in component lookup at startup. The text round-trip moves the risk to "did the rebuild preserve everything else", which item 5 of the checklist verifies directly.
+
 ## Pipeline
 
 `scripts/repack.py` implements all of the above. Conceptually:
@@ -76,7 +87,8 @@ zipalign -p -f 4 unsigned.apk aligned.apk
 apksigner sign --ks ks.jks --ks-pass pass:<pass> --key-pass pass:<pass> \
   --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
   --out signed.apk aligned.apk
-apksigner verify --print-certs -v signed.apk
+apksigner verify --print-certs --verbose \
+  --min-sdk-version 21 --max-sdk-version 34 signed.apk
 ```
 
 Enable **v1 + v2 + v3**. v1 is needed for older Android; v2/v3 for modern verification.
@@ -88,6 +100,12 @@ keytool -genkeypair -v -keystore ks.jks -alias <alias> \
   -storepass <pass> -keypass <pass> \
   -dname "CN=<name>, OU=dev, O=dev, L=NA, ST=NA, C=NA"
 ```
+
+## `apksigner verify` picks schemes from the APK's own minSdk
+
+`apksigner verify` decides which signature schemes to check from the APK's own `minSdkVersion`. With `minSdk >= 24` it prints v1/v2 as `false` **by design**, even though `META-INF/*.SF` is present and the signature is valid. That output is indistinguishable from "signing did not apply" and sends you into a re-signing loop over a file that was never wrong.
+
+Always pass the explicit range (Route B above) and read the scheme list from that run only. Never judge a build from a default-argument `apksigner verify`.
 
 ## Installing over an existing app
 
@@ -115,11 +133,11 @@ Useful detail: keeping the same keystore across builds lets you iterate with `-r
 
 Signature verification proves the file is well-formed. It does **not** prove the app works. Always:
 
-1. `apksigner verify` (or equivalent) passes.
+1. `apksigner verify` passes with the explicit SDK range above — a default-args run can report v1/v2 `false` on a perfectly valid signature.
 2. Install succeeds.
 3. Launch succeeds; process stays alive.
 4. `logcat` shows no `FATAL EXCEPTION` / `VerifyError` / `IncompatibleClassChangeError` / `uncaughtException`.
 5. `META-INF/services/*` count matches the original.
-6. Unchanged dex files are byte-identical to the original (compare hashes).
+6. Unchanged dex files are byte-identical to the original (compare hashes); in a de-shelled build, compare against the de-shelled base instead.
 
 Build a **control** at least once: same pipeline, zero patches. If the control fails, your pipeline or environment is at fault, not your patch (`references/pitfalls.md` P9).

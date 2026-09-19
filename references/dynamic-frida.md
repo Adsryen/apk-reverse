@@ -9,30 +9,67 @@ Use Frida when you need to answer:
 - Which domains does it resolve, and when?
 - Is the app detecting my instrumentation?
 
-## Setup
+## Setup — version alignment is a hard gate
 
-1. **Matching versions.** The `frida` Python package on the host and `frida-server` on the device must be the same version. Mismatch produces confusing handshake failures.
-2. **Run the server as root**, and give it a non-obvious name — many hardened apps look for processes/files named `frida-server`.
-   ```bash
-   adb push frida-server-<ver>-android-<abi> /data/local/tmp/
-   adb shell "su -c 'mkdir -p /data/local/tmp/.svc'"
-   adb shell "su -c 'cp -f /data/local/tmp/frida-server-<ver>-android-<abi> /data/local/tmp/.svc/kwork'"
-   adb shell "su -c 'chmod 755 /data/local/tmp/.svc/kwork'"
-   adb shell "su -c '/data/local/tmp/.svc/kwork' &"
-   ```
-3. **Keep the server alive.** Launching it through a shell that exits can get it reaped. Hold the connection open from the host (spawn it from a script that stays alive), or use a supervisor on device.
-4. **Pick the right ABI** — `getprop ro.product.cpu.abi`.
-5. **Spawn, don't attach, when timing matters.** Attaching usually misses startup (init, first network calls, splash logic).
-   ```python
-   device = frida.get_usb_device()
-   pid = device.spawn([pkg])
-   session = device.attach(pid)
-   # ... load script, wait until hooks are installed ...
-   device.resume(pid)          # only resume AFTER hooks are ready
-   ```
-   **Common bug:** resuming before the script has finished loading loses the first ~100–300 ms, which is exactly where init happens. Have the script `send()` a ready signal and resume only after receiving it.
+**Do this first.** Nearly every "Frida is broken on this device" report is a version mismatch, and the error text rarely says so. The host `frida` package and the device-side `frida-server` must be the **same version**, and that version must actually support the device's Android release. Align, then debug everything else.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `unable to locate Android dynamic linker` | host/server too new for this Android release | drop to an older frida line (16.x is a safe baseline for older ROMs) |
+| `Java is not defined` / `Java.perform is not a function` | that build ships no bundled Java bridge | align to a build that has it, or inline the bridge (see *17+ gotchas*) |
+| `Failed to connect to remote frida-server` / `unexpected message` / `invalid message` | host package and device server differ | download both from the same release tag |
+| `Java.choose` / `Java.use` throws immediately | bridge present but the VM is not ready | wrap everything in `Java.perform` |
+| Attached, but hooks fire in the wrong process | USB auto-selection grabbed the emulator | use an explicit remote device (below) |
+| `HOOK-OK` prints and nothing ever fires | not a version problem | go to *Hook never fires* |
+
+### Prefer a remote device over USB
+
+With a physical device *and* an emulator attached, `frida.get_usb_device()` can silently pick the emulator — you then attach to the wrong process and chase phantom failures for a long time. Address the device explicitly:
+
+```bash
+adb devices -l                                  # get <serial>
+adb -s <serial> forward tcp:27042 tcp:27042
+frida -H 127.0.0.1:27042 -f <app.package> -l probe.js --no-pause
+```
+
+```python
+device = frida.get_device_manager().add_remote_device('127.0.0.1:27042')
+```
+
+Keep `-s <serial>` on every other adb call too, or you will drift between targets mid-session.
+
+### Start the device server so it survives
+
+Run it as root, give it a non-obvious name out of obvious paths, and **detach it from the shell's session**. A process started with `nohup ... &` from an `adb shell` that then exits gets reaped mid-run — the hooks work for a minute and then stop.
+
+```bash
+adb push frida-server-<ver>-android-<abi> /data/local/tmp/
+adb shell "su -c 'mkdir -p /data/local/tmp/.svc'"
+adb shell "su -c 'cp -f /data/local/tmp/frida-server-<ver>-android-<abi> /data/local/tmp/.svc/kwork'"
+adb shell "su -c 'chmod 755 /data/local/tmp/.svc/kwork'"
+adb shell "su -c 'setsid /data/local/tmp/.svc/kwork >/dev/null 2>&1 </dev/null &'"
+adb shell "su -c 'pgrep -f kwork'"     # must still be alive after the shell returned
+```
+
+If `setsid` is unavailable, hold the adb connection open instead: run `adb shell "su -c '/data/local/tmp/.svc/kwork'"` as a host-side background job and leave it running for the whole session.
+
+### Spawn, don't attach, when timing matters
+
+ABI must match the device (`getprop ro.product.cpu.abi`). Attaching usually misses startup — init, the first network calls, and splash logic all happen before you get a session.
+
+```python
+device = frida.get_device_manager().add_remote_device('127.0.0.1:27042')
+pid = device.spawn([pkg])
+session = device.attach(pid)
+# ... load the script, wait until it reports that hooks are installed ...
+device.resume(pid)          # resume ONLY after hooks are ready
+```
+
+**Common bug:** resuming before the script has finished loading loses the first ~100–300 ms, which is exactly where init happens. Have the script `send()` a ready signal (the probe template below sends `PROBE-READY`) and resume only after receiving it.
 
 ## Frida 17+ gotchas
+
+The preferred fix for every symptom in the table above is **version alignment**. Use these only when you genuinely must run a 17+ build.
 
 - The **built-in Java bridge was removed**. `Java.perform(...)` is not available unless you inline the bridge yourself:
   ```python
@@ -99,6 +136,200 @@ Inet.getAllByName.overload('java.lang.String').implementation = function (h) {
 };
 ```
 This is often the **decisive evidence** for an ad-removal claim: if the ad SDK's domains are *never resolved*, the subsystem never started — a much stronger statement than "logcat was quiet". It also works for SDKs that bypass the system HTTP proxy.
+
+## The four-layer probe template
+
+When the question is "why did this request fail / where did it go", do not hook one class and hope. Ship **one long-lived script that hooks four layers at once**; whichever layer fires first localizes the problem immediately. This is the single most productive artifact of a runtime investigation — reuse it verbatim.
+
+The layers, and why each one is there:
+
+1. **The app's own network wrapper** — enumerate `getDeclaredMethods` and wrap *every* overload, so you do not have to guess the entry point.
+2. **OkHttp end to end** — `newCall`, `Request$Builder.build`, `RealCall.execute`, `AsyncCall.run`, `RealInterceptorChain.proceed`. The last two are the ones that fire for asynchronous calls.
+3. **`java.net.URL.openConnection`** — plenty of login/register paths never touch OkHttp; they use `HttpsURLConnection` and a completely different trust configuration.
+4. **`Throwable.getMessage`** — pulls out the original text of exceptions an upper layer caught and swallowed. Without it, a caught failure looks like "nothing happened".
+
+Rules that make the difference between a usable probe and a wasted session:
+
+- **Write to a file as well as to `send()`.** Stdout is lossy and the CLI drops messages; the file is the evidence.
+- **Let it stay resident.** Hook before the app touches the network, then leave it running while you drive the UI. A one-shot script misses everything that happens after its first second.
+- **Wrap every hook in its own `try/catch`.** One missing class must not take down the other three layers.
+- **Never capture an overload in a `var`.** Inside a loop, `var ov = ...` leaves every hook pointing at the *last* overload: they install cleanly and then mis-report forever. Use `let` or `.forEach()`.
+
+`scripts/frida_probe.js` is the same probe in a fuller form (per-arity dispatch, DNS layer, dedup and hard caps). The script below is the minimal portable one — paste it into any loader and it adapts to the target.
+
+```javascript
+// probe.js — four-layer network + swallowed-exception probe.
+const APP_PKG = '<app.package>';
+const APP_NET_CLASS = 'com.example.app.net.HttpHelper';   // the app's own wrapper, once you have found it
+const LOGFILE = '/data/user/0/' + APP_PKG + '/files/probe.log';   // app-private: always writable by the app
+const MAX_THROW = 400;                                    // Throwable.getMessage is hot — cap it
+const INTERESTING = /(network|http|ssl|cert|fail|timeout|refused|unable|error|exception)/i;  // widen for the app's UI language
+
+let out = null;
+try { out = new File(LOGFILE, 'a'); } catch (e) {}
+
+function log(ev, data) {
+  const line = JSON.stringify(Object.assign({ t: Date.now(), ev: ev }, data));
+  try { send(line); } catch (e) {}
+  try { if (out !== null) { out.write(line + '\n'); out.flush(); } } catch (e) {}
+}
+
+function stack(n) {
+  try {
+    const t = Java.use('java.lang.Throwable').$new();
+    return Java.use('android.util.Log').getStackTraceString(t).split('\n').slice(1, (n || 6) + 1).join(' | ');
+  } catch (e) { return '<no stack>'; }
+}
+
+function sa(args) {                       // a hook must never die inside its own logging
+  try {
+    const o = {};
+    for (let i = 0; i < args.length; i++) o['a' + i] = args[i] === null ? 'null' : '' + args[i];
+    return o;
+  } catch (e) { return { err: '' + e }; }
+}
+
+// 1) the app's own wrapper: every declared method, every overload, separately wrapped
+function hookAppNet(cls) {
+  try {
+    const C = Java.use(cls);
+    const ms = C.class.getDeclaredMethods();
+    for (let i = 0; i < ms.length; i++) {
+      try {
+        const name = ms[i].getName();
+        const ps = ms[i].getParameterTypes();
+        const sig = [];
+        for (let j = 0; j < ps.length; j++) sig.push(ps[j].getName());
+        const ov = C[name].overload.apply(C[name], sig);
+        ov.implementation = function () {
+          try { log('APP-NET', { cls: cls, m: name, args: sa(arguments), stack: stack(5) }); }
+          catch (e) { log('PROBE-ERR', { at: 'app-net', msg: '' + e }); }
+          return ov.apply(this, arguments);
+        };
+      } catch (e) { log('HOOK-SKIP', { cls: cls, m: ms[i].getName(), msg: '' + e }); }
+    }
+    log('HOOK-OK', { layer: 'app-net', cls: cls, n: ms.length });
+  } catch (e) { log('HOOK-FAIL', { layer: 'app-net', cls: cls, msg: '' + e }); }
+}
+
+// 2) OkHttp end to end — internal class names moved between major versions, so try every location
+function hookOkHttp() {
+  const targets = [
+    ['okhttp3.OkHttpClient', 'newCall'],
+    ['okhttp3.Request$Builder', 'build'],
+    ['okhttp3.RealCall', 'execute'],
+    ['okhttp3.RealCall$AsyncCall', 'run'],
+    ['okhttp3.internal.http.RealInterceptorChain', 'proceed'],        // okhttp 3.x
+    ['okhttp3.internal.connection.RealInterceptorChain', 'proceed']   // okhttp 4.x / 5.x
+  ];
+  for (let i = 0; i < targets.length; i++) {
+    const cn = targets[i][0], mn = targets[i][1];
+    try {
+      const ovs = Java.use(cn)[mn].overloads;    // every overload of that name; use .overload('<sig>') if this is undefined
+      for (let j = 0; j < ovs.length; j++) {
+        const ov = ovs[j];                       // block-scoped: every hook keeps its own overload
+        ov.implementation = function () {
+          try { log('OKHTTP', { cls: cn, m: mn, args: sa(arguments), stack: stack(6) }); }
+          catch (e) { log('PROBE-ERR', { at: cn, msg: '' + e }); }
+          return ov.apply(this, arguments);
+        };
+      }
+      log('HOOK-OK', { layer: 'okhttp', cls: cn, m: mn, overloads: ovs.length });
+    } catch (e) { log('HOOK-SKIP', { layer: 'okhttp', cls: cn, m: mn, msg: '' + e }); }
+  }
+}
+
+// 3) java.net.URL — login/register frequently bypasses OkHttp entirely
+function hookRawUrl() {
+  try {
+    const U = Java.use('java.net.URL');
+    const o0 = U.openConnection.overload();
+    o0.implementation = function () {
+      try { log('RAW-URL', { url: '' + this.toString(), stack: stack(6) }); } catch (e) {}
+      return o0.apply(this, arguments);
+    };
+    try {
+      const o1 = U.openConnection.overload('java.net.Proxy');
+      o1.implementation = function () {
+        try { log('RAW-URL', { url: '' + this.toString(), proxy: true, stack: stack(6) }); } catch (e) {}
+        return o1.apply(this, arguments);
+      };
+    } catch (e) {}
+    log('HOOK-OK', { layer: 'url' });
+  } catch (e) { log('HOOK-FAIL', { layer: 'url', msg: '' + e }); }
+}
+
+// 4) Throwable.getMessage — the original text of an exception an upper layer caught and swallowed
+function hookThrowable() {
+  try {
+    const T = Java.use('java.lang.Throwable');
+    const seen = {};
+    let n = 0;
+    T.getMessage.implementation = function () {
+      const msg = this.getMessage();          // self-call inside the replacement is fine (Frida guards it)
+      try {
+        if (msg !== null && msg !== undefined && n < MAX_THROW) {
+          const cls = '' + this.getClass().getName();
+          const interesting = cls.indexOf('Exception') >= 0 || cls.indexOf('Error') >= 0 || INTERESTING.test('' + msg);
+          const key = cls + '|' + msg;
+          if (interesting && seen[key] === undefined) {   // dedup: this method is on a very hot path
+            seen[key] = 1; n++;
+            log('THROW', { cls: cls, msg: '' + msg, stack: stack(4) });
+          }
+        }
+      } catch (e) {}
+      return msg;
+    };
+    log('HOOK-OK', { layer: 'throwable' });
+  } catch (e) { log('HOOK-FAIL', { layer: 'throwable', msg: '' + e }); }
+}
+
+Java.perform(function () {
+  hookAppNet(APP_NET_CLASS);
+  hookOkHttp();
+  hookRawUrl();
+  hookThrowable();
+  log('PROBE-READY', { pkg: APP_PKG, logfile: LOGFILE });   // the host waits for this before resuming
+});
+```
+
+Read the log after driving the UI. `RAW-URL` (with no `OKHTTP` events) is how you learn the request went over `HttpsURLConnection` — a different trust path entirely (`references/server-api.md` § TLS). `THROW` is how you learn an upper layer swallowed the real error.
+
+```bash
+# pull the record (app-private path needs root to read)
+adb -s <serial> shell "su -c 'cat /data/user/0/<app.package>/files/probe.log'" > probe.log
+```
+
+## Hook never fires — debug in this order
+
+`HOOK-SKIP` / `HOOK-FAIL` lines answer this before you start guessing. When every layer reports `HOOK-OK` and still no event arrives:
+
+1. **Does the class / method / overload actually exist?** A misspelled obfuscated name, a renamed okhttp internal class, or an overload taking `Object` instead of `String` all produce a wrapper that is simply never invoked.
+2. **Is the ClassLoader the right one?** Multi-dex, plugin-loaded and packed apps can hold several loaders; `Java.use` uses the app loader by default and throws `ClassNotFoundException` for a class that is plainly in the APK. Enumerate and switch:
+   ```javascript
+   Java.enumerateClassLoaders({
+     onMatch: function (l) { try { if (l.findClass('<app.net.Class>')) Java.classFactory.loader = l; } catch (e) {} },
+     onComplete: function () {}
+   });
+   ```
+3. **Is that code path reached at all?** Layer 4 settles it: if `THROW` events show the app failing earlier, your hook's call site is never executed and no amount of hooking will help.
+4. **Did your UI action trigger business logic?** A tap that looks fine but fails a local form check returns before any network call. Verify the input actually reached the field (`references/environment.md` § UI automation), not just that the button animated.
+
+## `Java.choose` also matches dead instances
+
+`Java.choose('com.example.app.MainActivity', ...)` returns **every** instance the VM still tracks, including finished and destroyed ones. Walking their view tree then yields an empty list — that is normal, not a bug in your script. Filter first, and prefer a direct reflective call over simulating a tap:
+
+```javascript
+Java.choose('com.example.app.MainActivity', {
+  onMatch: function (a) {
+    try {
+      if (a.isFinishing() || a.isDestroyed()) return;     // dead instance: skip it
+      send({ tag: 'live', view: '' + a.findViewById(<viewId>) });
+    } catch (e) {}
+  },
+  onComplete: function () {}
+});
+```
 
 ## Reading obfuscated code at runtime
 

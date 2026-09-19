@@ -248,3 +248,114 @@ Never build device commands inline in the host shell. Either:
 - put the device-side logic in a script that you push and execute.
 
 Same rule for `javac`: always pass `-encoding UTF-8` when sources contain non-ASCII, or the compiler reads them as the platform default and fails.
+
+---
+
+## P13. Trusting `apksigner verify` output at face value
+
+**Symptom**
+You signed with v1+v2+v3 explicitly enabled, then verification reports:
+```
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): false
+Verified using v3 scheme (APK Signature Scheme v3): true
+```
+Looks like v1/v2 silently did not happen, so you go re-engineer the signing step.
+
+**Root cause**
+`apksigner verify` decides **which schemes it is meaningful to check from the APK's own `minSdkVersion`**. When `minSdkVersion >= 24`, v1 is not required for install, and the tool reports it as `false` rather than "not applicable". The signatures are present and valid.
+
+**Why it is hard to see**
+Nothing in the output says "skipped because of minSdk". It reads exactly like a failure.
+
+**Do instead**
+Always verify with an explicit range so every scheme is evaluated:
+```
+apksigner verify --print-certs --verbose --min-sdk-version 21 --max-sdk-version 34 <apk>
+```
+Cross-check the fact independently: a real v1 signature means `META-INF/*.SF` and `META-INF/*.RSA` exist in the zip.
+
+---
+
+## P14. Treating same-size dex dumps as duplicates
+
+**Symptom**
+You deduplicate a memory dump by file size, keep one of each, and later find the kept dex is unusable (or silently wrong).
+
+**Root cause**
+Two dumps from the same process can have **identical byte length but different content** — different classes, even different dex version headers. One may additionally be structurally broken (header fields inconsistent with body, parser walks off the end of a table).
+
+**Why it is hard to see**
+Size equality is a tempting shortcut and is usually right for *file* duplicates. Here it is coincidence: two distinct dex objects were allocated to equal-length blocks.
+
+**Do instead**
+- Deduplicate by hash, never by size.
+- Validate every candidate before trusting it: check the `dex\n0xx` magic, then sanity-check the reported `file_size` / `header_size` / map offsets against the actual byte length.
+- Cross-check against the packing format when possible: with length-preserving encryption, **the encrypted payload's byte length equals the plaintext dex's byte length** — that mapping is the strongest signal for which dump is the original.
+
+---
+
+## P15. Frida version skew produces errors that look like a broken target
+
+**Symptom**
+Attach fails or the script dies immediately with errors such as:
+```
+unable to locate Android dynamic linker
+Java is not defined
+```
+on a device where Frida is clearly running.
+
+**Root cause**
+A host `frida` package newer than the device's `frida-server` (or the reverse) is unsupported. Additionally, some newer host versions dropped the built-in Java bridge, so `Java.perform` is undefined unless you inline the bridge yourself.
+
+**Why it is hard to see**
+The error names the linker or a missing global, not a version mismatch. It reads like an Android compatibility problem or an anti-instrumentation defense.
+
+**Do instead**
+- Pin host package and device server to the **identical** version before debugging anything else. Print both versions side by side first.
+- If the target is an older Android release, prefer the oldest version that still supports your API needs rather than the newest.
+- On a device with multiple attached targets, do not rely on automatic USB selection — see `references/dynamic-frida.md`.
+
+---
+
+## P16. Blaming your own patch for a server-side TLS failure
+
+**Symptom**
+After repacking, the app launches and browsing works, but **login / registration** fails with a network error. The obvious suspect is the new signature breaking the API contract, so you start hunting for a signature check in the client.
+
+**Root cause**
+The failure is at the TLS layer, not the application layer: the API host's certificate is expired (or the chain does not validate), and that particular request path validates against the **system trust store**. Shipping a different signature is irrelevant.
+
+Crucially, one app can carry **two independent trust chains**: requests through the app's own HTTP client (which may install a permissive `SSLSocketFactory` and `HostnameVerifier`) succeed, while requests through `java.net.URL.openConnection()` use the system defaults and fail. That is why "some features work" and "login does not".
+
+**Why it is hard to see**
+The user-visible message is a generic "network error". The real exception is usually swallowed by the app's own `try/catch`. And a client-side patch is the most recent change, so it gets blamed by default.
+
+**Do instead**
+- Capture the whole exception chain before theorizing. The give-away is
+  `CertPathValidatorException: timestamp check failed` → `CertificateException: Chain validation failed` → `SSLHandshakeException: Chain validation failed`.
+- Confirm independently of the app: strictly validate the host's certificate from your host machine and check `notAfter` against the device clock. See `references/tls-and-cert.md`.
+- Run the control: does the **unmodified original** fail the same way on the same device and network? If yes, it was never your patch.
+
+---
+
+## P17. Trusting UI automation to prove whether a patch worked
+
+**Symptom**
+Your script taps a button, nothing happens, and you conclude the patch broke the control. Or you tap, see no visible change, and conclude the feature is dead.
+
+**Root cause**
+Device input and screenshots are far less reliable than they look:
+- `input tap` can silently fail on specific widgets even with correct coordinates (ROM-dependent).
+- `input` needs `INJECT_EVENTS`; under a plain shell it fails quietly.
+- `screencap` can return a **zero-byte** file on some ROMs.
+- Form submission can be rejected by local validation before any request is made, so "the button does nothing" is a validation failure, not a broken handler.
+
+**Why it is hard to see**
+All of these produce the same observable: nothing happens. A zero-byte screenshot often goes unnoticed and is treated as "no change".
+
+**Do instead**
+- Read back the widget tree (`uiautomator dump`) instead of trusting pixels: it gives real `bounds`, control text, and **field contents with lengths**. Verify every field is populated correctly *before* submitting.
+- Compare field values, not just presence — one case that burned an hour was two password fields of different length, causing local validation to `return` before any network call.
+- Treat "no visible change" as unproven, not as a negative result: confirm with an independent signal (logcat, a runtime probe, or a server-side request appearing in the capture).
+- If a tap does not register, fall back to launching the Activity directly or invoking the handler, rather than retrying coordinates.

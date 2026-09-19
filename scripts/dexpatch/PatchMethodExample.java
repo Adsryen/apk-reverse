@@ -22,33 +22,111 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * classes7.dex 定点改动（单次读写，绝不要连续重写两次）。
+ * dexlib2 surgical rewrites -- worked example: force one lambda's emit() to hand a
+ * constant downstream instead of the value it read from its source.
  *
- * 只做一件事：把免广告到期时间的读取 lambda 改成恒返回"未过期"。
+ * WHAT IT PATCHES
+ *   <target>$$inlined$map$1$2.emit(Object, Continuation)Object
+ *     -> send a fixed wide (long) constant to the downstream collector, unconditionally
  *
- *   VideoDataStore$currentAdFreeExpiresAt$$inlined$map$1$2.emit(Object; Continuation)Object
- *     -> 无条件向下游 collector 发一个超大 Long
+ * WHY THIS SHAPE
+ *   Kotlin's `map { ... }` on a Flow compiles to a synthetic class whose emit()
+ *   reads the source value from a field and forwards it to the collector. Replacing
+ *   that single forwarding body turns "value read from the data source" into
+ *   "constant", without touching the data source itself. Doing it in dex keeps the
+ *   change inside the APK, so a fresh install behaves the same way -- writing the
+ *   value into the app's runtime state instead would not survive a reinstall.
  *
- * 效果等价于 DataStore 里 ad_free_expires_at 永远没有过期，
- * 「看广告领特权」弹窗因此不再出现，而且这个改动写死在代码里，
- * 全新安装同样生效（DataStore 那份是运行时数据，随 APK 分发不了）。
+ * ONE READ, ONE WRITE. Never rewrite the same dex twice in the same run: dexlib2
+ * round-trips degrade an R8-optimized dex, and the second pass is where it shows.
  *
- * ⚠️ 不要顺手 patch Lx6;->d：那是通用的图片卡片 Composable，
- *    内容和广告共用，改成 return-void 会导致正常图片/播放链路一起失效。
+ * ADAPT TO YOUR TARGET
+ *   java PatchMethodExample <in.dex> <out.dex> [targetClass] [fieldOwner:fieldName:fieldType]
+ *                           [collectorIface] [continuationType]
+ *   Every optional argument defaults to an obviously-fake example value below, and
+ *   the effective values are printed at startup, so a run is never ambiguous.
+ *
+ * HOW TO FIND THE REAL VALUES
+ *   * target class: search the dex strings for the source's field/data key, then read
+ *     the call site with baksmali -- see scripts/dex_strings.py and scripts/find_refs.py.
+ *   * collector iface / continuation type: read them off the emit() signature in smali.
+ *     After R8 they are usually single letters; do not guess, copy them.
+ *
+ * DO NOT PATCH SHARED CODE BY ACCIDENT
+ *   A generic card/image composable is commonly shared between ordinary content and
+ *   ad slots. Turning such a method into `return-void` breaks normal rendering too.
+ *   Before patching anything, count its callers (scripts/find_refs.py).
  */
-public class PatchClasses7v2 {
+public class PatchMethodExample {
 
-    private static final String AD_CLASS =
-            "Lcyc/data/datastore/VideoDataStore$currentAdFreeExpiresAt$$inlined$map$1$2;";
-    private static final long BIG = 4102444800000L;   // ~2100-01-01 (ms)
+    /** Synthetic class that owns the lambda: <Owner>$<member>$$inlined$map$1$2. */
+    private static String TARGET_CLASS =
+            "Lcom/example/app/data/ExampleStore$currentValue$$inlined$map$1$2;";
+
+    /** The field on the lambda that holds the downstream collector. */
+    private static String FIELD_OWNER = "Lcom/example/app/data/ExampleStore$currentValue$$inlined$map$1$2;";
+    private static String FIELD_NAME = "b";
+    private static String FIELD_TYPE = "Lcom/example/app/Collector;";
+
+    /** The collector type and the Continuation type used by emit(). */
+    private static String COLLECTOR_IFACE = "Lcom/example/app/Collector;";
+    private static String CONTINUATION_TYPE = "Lkotlin/coroutines/Continuation;";
+
+    private static final long CONSTANT = 4102444800000L;   // ~2100-01-01 (ms)
+
+    private static void usage() {
+        System.out.println("usage: PatchMethodExample <in.dex> <out.dex> "
+                + "[targetClass] [fieldOwner:fieldName:fieldType] "
+                + "[collectorIface] [continuationType]");
+        System.out.println("  defaults (example values, replace for your target):");
+        System.out.println("    targetClass      " + TARGET_CLASS);
+        System.out.println("    fieldRef         " + FIELD_OWNER + ":" + FIELD_NAME + ":" + FIELD_TYPE);
+        System.out.println("    collectorIface   " + COLLECTOR_IFACE);
+        System.out.println("    continuationType " + CONTINUATION_TYPE);
+    }
+
+    private static void applyArgs(String[] args) {
+        if (args.length > 2 && !args[2].isEmpty()) {
+            TARGET_CLASS = args[2];
+        }
+        if (args.length > 3 && !args[3].isEmpty()) {
+            String[] parts = args[3].split(":");
+            if (parts.length != 3) {
+                throw new IllegalArgumentException(
+                        "fieldRef must be owner:name:type, got " + args[3]);
+            }
+            FIELD_OWNER = parts[0];
+            FIELD_NAME = parts[1];
+            FIELD_TYPE = parts[2];
+        }
+        if (args.length > 4 && !args[4].isEmpty()) {
+            COLLECTOR_IFACE = args[4];
+        }
+        if (args.length > 5 && !args[5].isEmpty()) {
+            CONTINUATION_TYPE = args[5];
+        }
+    }
 
     public static void main(String[] args) throws Exception {
+        if (args.length < 2) {
+            usage();
+            System.exit(2);
+        }
+        applyArgs(args);
+
         String in = args[0], out = args[1];
+        System.out.println("[in ] " + in);
+        System.out.println("[cfg] targetClass=" + TARGET_CLASS);
+        System.out.println("[cfg] fieldRef=" + FIELD_OWNER + ":" + FIELD_NAME + ":" + FIELD_TYPE);
+        System.out.println("[cfg] collectorIface=" + COLLECTOR_IFACE);
+        System.out.println("[cfg] continuationType=" + CONTINUATION_TYPE);
+        System.out.println("[cfg] constant=" + CONSTANT);
+
         org.jf.dexlib2.iface.DexFile dex =
                 DexFileFactory.loadDexFile(new File(in), Opcodes.forApi(34));
 
         List<ClassDef> outClasses = new ArrayList<ClassDef>();
-        int p = 0;
+        int patched = 0;
 
         for (ClassDef cd : dex.getClasses()) {
             List<Method> direct = new ArrayList<Method>();
@@ -57,7 +135,7 @@ public class PatchClasses7v2 {
             for (Method m : cd.getVirtualMethods()) virtual.add(m);
             boolean touched = false;
 
-            if (cd.getType().equals(AD_CLASS)) {
+            if (cd.getType().equals(TARGET_CLASS)) {
                 for (int pass = 0; pass < 2; pass++) {
                     List<Method> list = (pass == 0) ? direct : virtual;
                     for (int i = 0; i < list.size(); i++) {
@@ -67,18 +145,23 @@ public class PatchClasses7v2 {
                                 || m.getImplementation() == null) {
                             continue;
                         }
+                        // Register layout for emit(Object, Continuation):
+                        //   v0        scratch (return value)
+                        //   v1:v2     the wide constant we build
+                        //   v3 = p0   this (the lambda)
+                        //   v4 = p1   the value being forwarded (ignored)
+                        //   v5 = p2   the downstream Continuation
                         List<Instruction> body = new ArrayList<Instruction>();
-                        // v0 = collector, v1:v2 = long, p0=3 p1=4 p2=5
                         body.add(new ImmutableInstruction22c(Opcode.IGET_OBJECT, 0, 3,
-                                new ImmutableFieldReference(AD_CLASS, "b", "Lkw2;")));
-                        body.add(new ImmutableInstruction51l(Opcode.CONST_WIDE, 1, BIG));
+                                new ImmutableFieldReference(FIELD_OWNER, FIELD_NAME, FIELD_TYPE)));
+                        body.add(new ImmutableInstruction51l(Opcode.CONST_WIDE, 1, CONSTANT));
                         body.add(new ImmutableInstruction35c(Opcode.INVOKE_STATIC, 2, 1, 2, 0, 0, 0,
                                 new ImmutableMethodReference("Ljava/lang/Long;", "valueOf",
                                         Collections.singletonList("J"), "Ljava/lang/Long;")));
                         body.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_OBJECT, 1));
                         body.add(new ImmutableInstruction35c(Opcode.INVOKE_INTERFACE, 3, 0, 1, 5, 0, 0,
-                                new ImmutableMethodReference("Lkw2;", "emit",
-                                        Arrays.asList("Ljava/lang/Object;", "Lwj1;"),
+                                new ImmutableMethodReference(COLLECTOR_IFACE, "emit",
+                                        Arrays.asList("Ljava/lang/Object;", CONTINUATION_TYPE),
                                         "Ljava/lang/Object;")));
                         body.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_OBJECT, 0));
                         body.add(new ImmutableInstruction11x(Opcode.RETURN_OBJECT, 0));
@@ -87,22 +170,33 @@ public class PatchClasses7v2 {
                                 m.getParameters(), m.getReturnType(), m.getAccessFlags(),
                                 m.getAnnotations(), m.getHiddenApiRestrictions(),
                                 new ImmutableMethodImplementation(6, body, null, null)));
-                        p++;
+                        patched++;
                         touched = true;
-                        System.out.println("[patch] emit -> BIG=" + BIG + " (list=" + pass + ")");
+                        System.out.println("[patch] emit -> constant=" + CONSTANT
+                                + " (list=" + pass + ")");
                     }
                 }
             }
 
-            if (!touched) outClasses.add(cd);
-            else outClasses.add(new ImmutableClassDef(
-                    cd.getType(), cd.getAccessFlags(), cd.getSuperclass(), cd.getInterfaces(),
-                    cd.getSourceFile(), cd.getAnnotations(), cd.getStaticFields(),
-                    cd.getInstanceFields(), direct, virtual));
+            if (!touched) {
+                outClasses.add(cd);
+            } else {
+                outClasses.add(new ImmutableClassDef(
+                        cd.getType(), cd.getAccessFlags(), cd.getSuperclass(), cd.getInterfaces(),
+                        cd.getSourceFile(), cd.getAnnotations(), cd.getStaticFields(),
+                        cd.getInstanceFields(), direct, virtual));
+            }
         }
 
         DexFileFactory.writeDexFile(out, new ImmutableDexFile(Opcodes.forApi(34), outClasses));
-        System.out.println("[done] patched=" + p);
-        if (p == 0) System.exit(1);
+        System.out.println("[out ] " + out + "  patched=" + patched);
+        if (patched == 0) {
+            // The usual causes: wrong target class (R8 renamed it), the method is not
+            // emit(Object,Continuation), or the class is not in THIS dex.
+            System.err.println("[fail] target not found in this dex. Check: the exact "
+                    + "TARGET_CLASS descriptor, that emit(Object,Continuation) exists there, "
+                    + "and that you loaded the dex that actually contains this class.");
+            System.exit(1);
+        }
     }
 }

@@ -89,6 +89,61 @@ su -c "restorecon -R /data/user/0/<pkg>"
 ```
 `<uid>` from `dumpsys package <pkg> | grep userId=`.
 
+## Driving the UI from adb
+
+Automated UI interaction is where verification loops usually break, and most of the breakage looks like a bug in your script. Most of it is not.
+
+### `input tap` may simply not work on a given control
+
+On some OEM ROMs `input tap <x> <y>` is silently ignored for certain controls while working fine for others at neighboring coordinates. **Do not conclude that your automation is wrong.** Before doubting the script:
+
+```bash
+adb -s <serial> shell "su -c 'uiautomator dump /sdcard/ui.xml'"
+adb -s <serial> pull /sdcard/ui.xml
+# bounds="[x1,y1][x2,y2]" -> tap the center: ((x1+x2)/2, (y1+y2)/2)
+adb -s <serial> shell "su -c 'input tap <cx> <cy>'"
+```
+
+If the control still does not react, bypass the UI path entirely — `am start -n <app.package>/<activity>`, or invoke the logic from Frida. A finished task needs the *code path*, not the tap.
+
+`input` requires `INJECT_EVENTS`, which the plain `shell` user does not have. An unprivileged `input` **fails silently** — no error, no effect. Always wrap it: `su -c 'input tap ...'`.
+
+`input text` additionally mangles or drops non-ASCII input. For CJK text, either install an ADB-driven helper IME or set the field from a runtime call rather than typing.
+
+### Screen evidence without pixels
+
+`screencap` returns a 0-byte file on some ROMs. First try writing on-device and pulling:
+
+```bash
+adb -s <serial> shell "su -c 'screencap -p /sdcard/x.png'" && adb -s <serial> pull /sdcard/x.png
+```
+
+If that is also empty, do not fight it: `uiautomator dump`'s XML is **better** evidence — text, diffable, and it records the real control tree and its contents. (If the dump fails with `could not get idle state`, retry once; a paused animation is usually the cause.)
+
+### Verify form input by reading it back
+
+Filling a form and tapping submit is **not** a verified interaction. Read the actual field contents and lengths back first:
+
+```bash
+adb -s <serial> shell "su -c 'input text <value>'"       # no literal spaces; %s encodes one
+adb -s <serial> shell "su -c 'uiautomator dump /sdcard/ui.xml'"
+adb -s <serial> pull /sdcard/ui.xml
+grep -o 'text="[^"]*"' ui.xml                            # every populated field
+```
+
+A whole class of "the button does nothing" is really a local validation rejecting the input — two password fields of different length, a required field empty, a format check. The app returns **before** issuing any request, so a network probe stays silent and the tap looks broken. Compare the lengths you read back, fix the input, retry.
+
+### ROM background freezing kills your hooks
+
+Aggressive ROMs freeze backgrounded apps; the logcat signature is a process state transition `state: R -> F` (running to frozen). Once frozen, hooks stop firing and network calls stop, which looks exactly like a broken probe.
+
+```bash
+adb -s <serial> shell "su -c 'dumpsys deviceidle whitelist +<app.package>'"
+adb -s <serial> shell "su -c 'cmd appops set <app.package> RUN_IN_BACKGROUND allow'"
+```
+
+While debugging, **do not press HOME** — backgrounding the app is what triggers the freeze. Return to it with `am start -n <app.package>/<activity>` and keep it in the foreground for the whole session.
+
 ## Signal extraction (what to actually read)
 
 ```bash

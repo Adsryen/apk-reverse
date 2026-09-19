@@ -12,7 +12,7 @@ Two rules override everything else in this skill:
 1. **Never ship an unverified APK.** "It assembles" is not "it works". Install it, launch it, exercise the feature you changed, on a real device or a close emulator.
 2. **Know which layer owns the behavior before you patch.** Ads, paywalls, and feature gates live in different places. Patching the wrong layer either does nothing or breaks the app. Classify first (see step 2 below), patch second.
 
-## Start here: classify the target in five questions
+## Start here: classify the target in seven questions
 
 Answer these before touching a tool. Every one of them changes the whole plan.
 
@@ -30,10 +30,14 @@ Answer these before touching a tool. Every one of them changes the whole plan.
    App-side → you must bypass it. Server-side → re-signing silently breaks the app later. See `references/repack-and-sign.md` and `references/server-api.md`.
 5. **What is your device situation?** → `references/environment.md`
    Rooted real device (best), emulator with root, or no device (static only). Also: this determines whether Frida is usable.
+6. **Is one *specific feature* failing at runtime — login, registration, payment, an API-backed screen — while the rest of the app works?**
+   → `references/tls-and-cert.md`. A feature-scoped network failure is very often a **TLS/certificate problem on one code path**, not a consequence of your patch. The app can even carry two independent trust chains, so "other requests work" proves nothing. Rule this out in minutes before hunting for a signature check.
+7. **Was the input a build you did not produce** (a "cracked"/"modded" APK circulating online)?
+   → `references/third-party-builds.md`. Audit it before adopting it: such builds are frequently re-protected (sometimes with *more* layers than the original) and may carry injected components or endpoints. Never use one as a patching workbench.
 
 ## The workflow, end to end
 
-1. **Recon** — `references/recon.md`. Manifest, package name, version, ABI, dex count, packer, embedded SDKs, where the app's own code lives. Ten minutes here saves hours.
+1. **Recon** — `references/recon.md`. Manifest, package name, version, ABI, dex count, packer, embedded SDKs, where the app's own code lives. Ten minutes here saves hours. **If it is packed, unpack before anything else** (`references/recon.md` §unpacking): you cannot patch code you cannot read, the encrypted payload lengths tell you which dumped dex is the original, and a memory dump must be de-duplicated by hash and structurally validated before any of it is trusted.
 2. **Extract strings and endpoints** — build a picture of the app's API surface and SDK inventory from the dex string tables. No decompiler needed for this, and it is fast. Scripts: `scripts/dex_strings.py`.
 3. **Trace to the owning class** — find the class that wraps the behavior (the app almost always wraps third-party SDKs in one helper). Reverse-lookup instructions: `references/dex-patching.md` §finding-the-call-site.
 4. **Decide the patch layer** — client SDK call / client rendering / client data consumption / server contract. See the table in `references/ad-removal.md`.
@@ -50,6 +54,7 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 - **Do not patch a method that is widely shared.** Before patching any helper, count its callers (`scripts/find_refs.py`). A `Long.valueOf` wrapper with 30 callers is not an ad-specific hook.
 - **Do not make an API fail to suppress a UI element.** A 404/400 on an endpoint that other features depend on takes the whole screen down with it. Suppress at the data-consumption or render layer instead.
 - **Every claim needs evidence.** "Probably", "should be", "in theory" are not findings. Either you observed it, or you label it unverified.
+- **Attribute a failure to the right layer before patching again.** When something stops working after a rebuild, first check whether the **unmodified original** fails the same way on the same device and network. Feature-scoped network failures in particular are frequently the app's own TLS/certificate problem (`references/tls-and-cert.md`); chasing a signature check that does not exist burns hours.
 
 ## Reference index
 
@@ -67,6 +72,8 @@ Load only what the current step needs.
 | `references/dynamic-frida.md` | Frida setup, hooking strategy, tracing caller chains, finding the real call site |
 | `references/environment.md` | Device/emulator setup, root, ADB, networking, offline devices |
 | `references/verification.md` | Defining what "done" means; building the evidence chain |
+| `references/tls-and-cert.md` | One feature fails at runtime (login, registration, payment, an API-backed screen) while the rest of the app works |
+| `references/third-party-builds.md` | The input is a "cracked"/"modded" build you did not produce — audit it before trusting it |
 | `references/pitfalls.md` | Always worth a skim before building. This is the failure catalogue. |
 
 ## Script index
@@ -88,3 +95,6 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/datastore_inject.py` | Encode/inject AndroidX DataStore preferences (protobuf) safely |
 | `scripts/probe_api.py` | Probe an app's HTTP API with correct headers, report status/shape |
 | `scripts/install_test.py` | Install a build and run a launch/health check with logcat signal extraction |
+| `scripts/frida_probe.js` | Four-layer runtime probe: app network layer + OkHttp + java.net + swallowed exception messages |
+| `scripts/run_probe.py` | Inject a probe, stream it to a timestamped log file, stay resident while you operate the app |
+| `scripts/tls_check.py` | Strict certificate check for one or more hosts (expired / wrong host / untrusted CA) |

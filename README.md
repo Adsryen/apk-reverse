@@ -15,6 +15,11 @@ directly.
   burning hours on a paywall that is enforced by a server.
 - Choosing the **safest patch layer** for a given change, and avoiding the layers that
   break the app.
+- Separating **your own mistakes from the app's or the server's problems** — a
+  feature-scoped failure (login, registration, payment) is often a TLS/certificate issue on
+  one code path, not a consequence of the patch you just built.
+- Working through **packed/hardened targets**: identifying the packer, unpacking, and turning a
+  memory dump back into a patched, installable APK.
 - Avoiding the specific mistakes that produce an APK that builds perfectly and dies at
   runtime.
 
@@ -23,15 +28,17 @@ directly.
 ```
 SKILL.md                  decision tree, workflow, hard constraints, indexes
 references/               loaded on demand, one topic each
-  recon.md                    identify packer, SDKs, code location, tamper checks
-  ad-removal.md               ad taxonomy, wrapper mapping, callback trap, verification
+  recon.md                    identify packer, SDKs, code location, tamper checks; unpacking
+  ad-removal.md               ad taxonomy, wrapper mapping, callback trap, global gates, verification
   membership-and-limits.md    server vs client authority; what is and is not patchable
   server-api.md               probe an app's API; prove who owns the gate
+  tls-and-cert.md             feature-scoped network failures: expired certs, dual trust chains
+  third-party-builds.md       auditing a "cracked"/"modded" APK before trusting it
   dex-patching.md             patch-layer table + dexlib2 technique in depth
-  repack-and-sign.md          repack rules, signing, install, post-install hazards
+  repack-and-sign.md          repack rules, unpack-and-repack, signing, post-install hazards
   runtime-data.md             DataStore / SharedPreferences / SQLite / protobuf
-  dynamic-frida.md            Frida setup, hooking strategy, anti-instrumentation
-  environment.md              device/emulator setup, ADB, offline devices, log signals
+  dynamic-frida.md            Frida setup, version pinning, the four-layer probe, hook strategy
+  environment.md              device/emulator setup, ADB, UI automation, offline devices, log signals
   verification.md             the claim ladder; what "done" means
   pitfalls.md                 the failure catalogue -- read before building
 scripts/                  parameterized, path-agnostic
@@ -42,13 +49,16 @@ scripts/                  parameterized, path-agnostic
   dex_classdiff.py            prove a dex edit was surgical
   dex_strings.py              strings/URLs/SDK markers without a decompiler
   find_refs.py                count callers of a method before patching it
-  repack.py                   rebuild APK, strip only signatures, sign
+  repack.py                   rebuild APK, strip only signatures, sign, verify
   devsh.py                    quoting-safe ADB shell helper
   usb_net_proxy.py            give an offline device network over USB
   datastore_inject.py         encode/inject AndroidX DataStore preferences safely
   probe_api.py                probe an HTTP API with the right headers
   grab_crash.py               recover stacks hidden by a crash-reporter SDK
   install_test.py             install + launch health check with logcat signal scan
+  frida_probe.js              four-layer runtime probe (app net layer + OkHttp + java.net + exceptions)
+  run_probe.py                inject the probe, stream it to a log file, stay resident
+  tls_check.py                strict certificate check for one or more hosts
 ```
 
 ## Install
