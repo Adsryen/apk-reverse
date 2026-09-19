@@ -18,6 +18,9 @@ directly.
   machine", and confusing the two is the most expensive drift in this domain.
 - Choosing the **safest patch layer** for a given change, and avoiding the layers that
   break the app.
+- Catching the repack failure that looks like success: an app that installs, launches and
+  renders perfectly while **every signed request is rejected**, because the client derives its
+  request-signing key from its own signing certificate.
 - Separating **your own mistakes from the app's or the server's problems** — a
   feature-scoped failure (login, registration, payment) is often a TLS/certificate issue on
   one code path, not a consequence of the patch you just built. Device state, a dead device
@@ -50,6 +53,9 @@ references/               loaded on demand, one topic each
   long-task-discipline.md     live record, conclusion grading, drift control, timeout and
                               wait calibration, deliverable-form drift, handover
   ad-removal.md               ad taxonomy, wrapper mapping, callback trap, global gates, verification
+  signature-derived-keys.md   when the app's own signing certificate is used as key material:
+                              detection greps, why offline extraction is unreliable, the
+                              hardcode-then-verify procedure
   membership-and-limits.md    server vs client authority; what is and is not patchable
   server-api.md               probe an app's API; prove who owns the gate
   tls-and-cert.md             feature-scoped network failures: expired certs, dual trust chains
@@ -94,6 +100,8 @@ scripts/                  parameterized, path-agnostic
                               (base64/hex x rotation x deflate); re-encode the edited payload
   snap.py                     bounded burst screenshots + control-tree capture with a stall
                               detector, and a verdict on whether the tree is usable at all
+  sig_probe.py                find the exact signatures[0].toCharsString() value — offline
+                              candidates from an APK, or the authoritative read from a device
 ```
 
 ## Install

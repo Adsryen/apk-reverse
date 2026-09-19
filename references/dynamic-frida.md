@@ -38,6 +38,50 @@ device = frida.get_device_manager().add_remote_device('127.0.0.1:27042')
 
 Keep `-s <serial>` on every other adb call too, or you will drift between targets mid-session.
 
+### Attach by PID when the process list is incomplete
+
+`device.enumerate_processes()` can return a list that simply does not contain the app you are
+targeting, while `adb shell ps -A | grep <pkg>` shows it running. This is an enumeration gap,
+not a permission problem, and no amount of retrying fixes it. Resolve the pid through adb and
+attach to it directly:
+
+```python
+import subprocess
+
+def find_pid(serial, pkg):
+    out = subprocess.run(['adb', '-s', serial, 'shell', 'ps -A -o PID,NAME'],
+                         capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == pkg:
+            return int(parts[0])          # last match wins; use the main process
+    return None
+
+pid = find_pid(serial, pkg)
+session = device.attach(pid)              # works where attach(pkg) raises ProcessNotFound
+```
+
+Two related behaviours worth knowing:
+
+- `attach(<package name>)` raises `ProcessNotFoundError` in exactly this situation, which is
+  easy to misread as "the app is not running".
+- A pid captured earlier goes stale the moment the process is recycled. Re-resolve it
+  immediately before each injection rather than reusing a value from an earlier step.
+
+### Verify the runtime before blaming the script
+
+A script that reports nothing at all is usually not seeing the Java layer. Two failure modes
+look identical from the host — test for both in one go:
+
+```javascript
+// send({ runtime: Script.runtime, java: typeof Java, objc: typeof ObjC });
+```
+
+- `Java` is `undefined` ⇒ the script runtime has no Java bridge. Pass `runtime='v8'`
+  explicitly when creating the script; some builds default to a runtime without it.
+- The bridge exists but every hook misses ⇒ you attached to the wrong process, or the layer
+  below is native (go to the four-layer probe / `references/native-and-so.md`).
+
 ### Start the device server so it survives
 
 Run it as root, give it a non-obvious name out of obvious paths, and **detach it from the shell's session**. A process started with `nohup ... &` from an `adb shell` that then exits gets reaped mid-run — the hooks work for a minute and then stop.

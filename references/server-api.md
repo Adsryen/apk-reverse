@@ -74,10 +74,12 @@ When you plan to change a request parameter (a path, a `position`, an id), probe
 
 **Repack-hostile (will break a re-signed client):**
 - Signature/certificate checked server-side, or pinned in native code.
-- Request signing derived from the APK signature.
+- Request signing derived from the APK signature — the client computes with its own
+  certificate, so re-signing changes the key. Silent and easy to misdiagnose; detection,
+  extraction and the differential test are in `references/signature-derived-keys.md`.
 - Device attestation (Play Integrity / SafetyNet, OEM attestation).
 
-Determine which you face **before** shipping a repack. A client that authenticates fine on first launch but silently fails features later is the classic signature-validation symptom.
+Determine which you face **before** shipping a repack. A client that authenticates fine on first launch but silently fails features later is the classic signature-validation symptom — and when computed signing parameters (`sign`, `_p`, `uth`) evaluate to `-1` or empty, it is the signature-derived-key case rather than a server decision.
 
 ## What to record
 

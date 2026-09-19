@@ -13,7 +13,7 @@ Three rules override everything else in this skill:
 2. **Never ship an unverified APK.** "It assembles" is not "it works". Install it, launch it, exercise the feature you changed, on a real device or a close emulator.
 3. **Know which layer owns the behavior before you patch.** Ads, paywalls, and feature gates live in different places. Patching the wrong layer either does nothing or breaks the app. Classify first (see step 2 below), patch second.
 
-## Start here: classify the target in seven questions
+## Start here: classify the target in ten questions
 
 Answer these before touching a tool. Every one of them changes the whole plan.
 
@@ -51,6 +51,12 @@ Answer these before touching a tool. Every one of them changes the whole plan.
    and keep its record updated as you go. Re-read the refuted-conclusions and dead-routes sections
    before starting any new experiment. Losing earlier findings is the most expensive failure in this
    skill, and it is entirely preventable.
+10. **Does the client sign its requests with its own signing certificate?**
+    → `references/signature-derived-keys.md`. Grep for `toCharsString()` / `signatures[0]` /
+    `getPackageInfo(..., 64)` **before the first repack**. If that value feeds a native HMAC/DES
+    routine, the rebuilt APK must hardcode the *original* certificate value at every read site, or
+    every signed request fails while the app still launches and looks healthy. This is the single
+    most expensive silent failure in a repack, and 15 minutes of grep prevents it.
 
 ## The workflow, end to end
 
@@ -94,6 +100,7 @@ Load only what the current step needs.
 | `references/server-api.md` | The behavior is decided by a response, or you need to know if a patch can even matter |
 | `references/dex-patching.md` | Any actual editing of dex/smali, choosing a patch layer, choosing a tool |
 | `references/repack-and-sign.md` | Rebuilding, signing, installing, or a repacked app misbehaves |
+| `references/signature-derived-keys.md` | The app reads `signatures[0]`/`toCharsString()`, or a rebuilt APK installs and runs but every signed request fails (`sign`/`_p`/`uth` empty or `-1`) |
 | `references/runtime-data.md` | Local state matters: DataStore, SharedPreferences, SQLite, protobuf caches, tokens — **or your data edit keeps being reverted, or a stored value looks encrypted** |
 | `references/dynamic-frida.md` | Frida setup, hooking strategy, tracing caller chains, finding the real call site |
 | `references/environment.md` | Device/emulator setup, root, ADB, networking, offline devices, emulator console control and recovery, **the preflight check to run before every experiment block** |
@@ -132,3 +139,4 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/lib_map.py` | What is **actually mapped** into a live process: per-library path, base, architecture (`ELF e_machine`), and classification (system / from-APK / runtime-materialized). Answers "which library and which ABI is really executing". |
 | `scripts/blob_decode.py` | Decode an opaque stored value by searching the parameter space (base64/base64url/hex × rotation × deflate/zlib/gzip) instead of guessing, then re-encode an edited payload with the same parameters. |
 | `scripts/snap.py` | Bounded burst screenshot + control-tree capture, with a stall detector and an explicit verdict on whether the accessibility tree is usable at all. Use it so you *look* at the screen instead of driving blind. |
+| `scripts/sig_probe.py` | Find the exact `signatures[0].toCharsString()` value: offline candidate enumeration from an APK (`--apk`), or the authoritative value read from a live package (`--live`). Feed the result into the hardcoded constant described in `references/signature-derived-keys.md`. |

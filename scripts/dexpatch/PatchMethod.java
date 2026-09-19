@@ -15,7 +15,7 @@ import java.util.List;
 /**
  * dexlib2 定点 patch：把指定方法的实现整体替换为 return-void（或 return 常量）。
  *
- * 为什么不用 baksmali/smali 整树往返：实测本项目的 classes7.dex 往返重建后运行时报
+ * 为什么不用 baksmali/smali 整树往返：实测在一个多 dex 应用上，整树往返重建后运行时报
  *   IncompatibleClassChangeError: Found interface io.ktor.client.engine.HttpClientEngine,
  *   but class was expected
  * （R8 生成的 synthetic access bridge 被破坏）。本工具只改目标方法的 code_item，

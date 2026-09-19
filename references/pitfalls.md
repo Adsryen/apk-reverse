@@ -641,3 +641,52 @@ and arrives fast, which reads as competence.
   derived only from the tool's own output means nothing.
 - **Name helpers so they cannot shadow a module** (`dart_disasm.py`, not `dis.py`), and keep a
   timeout on every scan (SKILL.md).
+
+---
+
+## P27. Every request fails after a repack because the signing certificate *is* the key
+
+**Symptom**
+
+The rebuilt app installs, launches, and draws its shell — but every API-backed screen shows a
+generic network error. Computed request parameters (`sign`, `_p`, `uth`) come out as `-1`,
+empty, or null. No Java exception anywhere, and the app's own UI still looks healthy.
+
+**Root cause**
+
+The client uses **its own APK signing certificate as key material**: it reads
+`PackageInfo.signatures[0]` and hands that value to a native HMAC/DES routine which produces the
+request signature. Re-signing changed the certificate, so the derived key changed, so the server
+rejects every signed request. This is not "the server checks the signature" — the *client* is
+computing with it, and the server was built against the original key.
+
+**Why it is hard to see**
+
+It reads as a server problem or a bad patch. The artifact is valid, the patch is correct, the
+build verifies, and the app runs — so the natural conclusion is "a client patch is not possible
+here", which sends you back into static analysis for hours. A naive fix also survives inspection:
+hardcoding *a* signature value produces correct-looking smali and a clean build, and nothing
+complains until a request is actually sent.
+
+A second trap sits inside the first: `signatures[0].toByteArray()` is **not** the
+`META-INF/*.RSA` file. On modern Android it is a certificate DER taken from inside the PKCS#7
+chain. Hardcoding the whole `.RSA` content (1199 bytes in one measured sample) instead of the
+runtime value (777 bytes) yields a build in which every signing parameter is `-1`.
+
+**Do instead**
+
+1. **Detect it before repacking.** Grep the decompiled sources for `toCharsString()`,
+   `getPackageInfo(..., 64)` and `signatures[0]`. If the value feeds a native method that also
+   does HMAC/AES/DES, this pitfall applies.
+2. **Read the real value from the device**, not from the file —
+   `python scripts/sig_probe.py --live <pkg>`. Cross-check the candidate list from
+   `scripts/sig_probe.py --apk <original.apk>`; the runtime length decides which candidate is
+   correct.
+3. **Hardcode it at every read site** (there is usually more than one), then assert the remaining
+   site count is zero.
+4. **Prove it differentially.** Print the computed signing parameter for the same startup request
+   on the original build and the rebuilt one. Same shape ⇒ consistent. `-1`/empty ⇒ the key is
+   still wrong.
+5. **Check the OAID/device-id path too** — it frequently hashes the same certificate separately.
+
+Full treatment: `references/signature-derived-keys.md`.
