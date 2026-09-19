@@ -247,6 +247,35 @@ nothing.
 Changing its behaviour to reach one terminate symbol is a large blast radius for a problem you may
 not have.
 
+## What these checks actually detect — and why your environment changes the answer
+
+A terminate path is not reading your patch. It is reading **the world around the process**, so what
+trips it is environmental, and the same build can die in one setup and live in another.
+
+| Signal | Typical probe |
+|---|---|
+| a debugger is attached | `ptrace`, `TracerPid` in `/proc/self/status`, `prctl` |
+| the parent process was replaced | a cached `getppid()` compared against a fresh one |
+| the process was suspended | wait status showing `SIGSTOP` / `SIGTRAP` |
+| instrumentation is present | hook-framework artefacts: listening ports, thread names, unusual mappings |
+| a "non-standard" environment | root binaries, emulator fingerprints, writable system paths, build props |
+
+Two consequences decide whether your experiments mean anything at all:
+
+1. **A pass under translation is not a pass on hardware.** Under an ARM-on-x86 translator the
+   environment probes return different answers — in *both* directions. A check that fires natively
+   may stay quiet here, and one that is quiet natively may fire. Emulator or translated results are
+   a mid-task checkpoint, never the final verdict.
+
+2. **Your own tooling can be the thing that trips it.** If the app only dies while you are attached,
+   you are looking at a probe aimed at *you*, not at the app's ordinary startup path. Reproduce with
+   nothing attached before you patch anything.
+
+**Run the unmodified original through the identical conditions first.** If it dies the same way, the
+check is firing on the environment rather than on your change, and every conclusion drawn from the
+patched build's death is void. This is the same control-build rule as everywhere else in this skill,
+and it is the single cheapest way to avoid chasing a detection that is not about you.
+
 ## Verification
 
 A native suppression earns no credit until:
