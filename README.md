@@ -325,6 +325,7 @@ Three tools live at the root and are not part of the installed skill:
 ```
 check_repo.py      every skill discovered, frontmatter valid, scripts runnable,
                    documented paths resolve, README paths explicit and existing
-check_refs.py      every `file.md` §section cross-reference reaches a real heading
+check_refs.py      every cross-reference that names a section of another
+                   document reaches a real heading in that document
 build_scripts.py   audit for machine-specific leftovers (absolute paths, credentials)
 ```
