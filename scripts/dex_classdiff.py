@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""对比两个 dex 的 class_defs：类名 + access_flags（重点看 ACC_INTERFACE 0x200）。
+"""Diff two dex files at the class_defs level: class names + access_flags.
+The interesting flag is ACC_INTERFACE (0x200).
 
-用途：验证 baksmali -> smali 整树往返是否损伤了 dex 的 interface/class 关系。
-ICCE "Found interface X, but class was expected" 就是这类损伤的典型症状。
+Use it to prove that a disassemble -> reassemble round-trip did not damage the dex's
+interface/class relationships. The classic symptom of that damage is
+IncompatibleClassChangeError ("Found interface X, but class was expected") at runtime.
 
-用法：python dex_classdiff.py <a.dex> <b.dex> [过滤子串]
+Important limitation: this check compares tables only. It cannot see code-item damage —
+see references/patch-audit.md for the checks that can.
+
+Usage: python dex_classdiff.py <a.dex> <b.dex> [filter-substring]
 """
 import struct
 import sys

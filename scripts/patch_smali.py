@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-方法级 smali 补丁器。
+Method-level smali patcher.
 
-设计要点（踩坑后确定）：
-- 只替换「.method 声明行的下一行」到「.end method 之前」的指令体，
-  保留原 .method / .end method / .annotation 段不动，避免破坏修饰符与注解。
-- 补丁清单要求显式给出自洽的 .registers 值：smali 汇编器会校验寄存器不越界，
-  registers 必须 >= max(参数寄存器数) 且 >= 指令里用到的最大寄存器编号 + 1。
-  参数寄存器数：static 方法 = 参数个数；非 static = 参数个数 + 1（this）。
-- 补丁清单是 JSON 列表，每条：
+Design notes (each one earned the hard way):
+- Only the instruction body is replaced: from the line after the `.method` declaration up to
+  (but not including) `.end method`. The `.method` / `.end method` / `.annotation` sections are
+  left untouched, so modifiers and annotations survive.
+- The patch manifest must state a self-consistent `.registers` value: the assembler rejects
+  out-of-range registers, so `registers` must be >= the number of parameter registers and
+  >= the highest register index used by any instruction + 1. Parameter registers:
+  static method = number of parameters; instance method = number of parameters + 1 (this).
+- The manifest is a JSON list; each entry:
   {
-    "file":   "com/example/Helper.smali",              # path relative to smali tree root
+    "file":   "com/example/Helper.smali",              # path relative to the smali tree root
     "method": ".method public final show(Landroid/app/Activity;)V",  # exact .method line
     "registers": 3,
     "body": ["invoke-interface {p3}, ...;", "return-void"],
-    "note": "干掉插屏广告"                                # 可选，仅用于报告
+    "note": "why this patch exists"                     # optional, report only
   }
 
-用法：
+A literal-match tool: whitespace, operand punctuation and instruction names must match the
+source exactly, and the anchor must be unique. See references/patch-audit.md section 3.
+
+Usage:
   python patch_smali.py <smali_tree> <patch.json> [--dry-run]
 """
 import json
@@ -28,7 +33,7 @@ import sys
 
 
 def split_methods(text):
-    """把 smali 文本切成 [(method_decl, start_idx, end_idx)]，按行索引。"""
+    """Split smali text into [(method_decl, start_idx, end_idx)] using line indices."""
     lines = text.split('\n')
     out = []
     start = None
@@ -53,7 +58,7 @@ def patch_one(path, decl_wanted, registers, body):
     if len(hits) > 1:
         return False, 'ambiguous (%d matches): %s' % (len(hits), decl_wanted)
     _, start, end = hits[0]
-    # 保留 .method 行；重写内部：.registers + body
+    # Keep the .method line; rewrite the interior: .registers + body
     new_inner = ['    .registers %d' % registers, '']
     for b in body:
         new_inner.append('    ' + b)

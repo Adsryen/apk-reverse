@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-用于给「无网络」Android 设备供网的极简 HTTP/HTTPS 代理。
+Minimal HTTP/HTTPS forward proxy for giving an offline Android device network access.
 
-场景：手机 WiFi DHCP 失败 -> 无默认网络 -> app 所有请求失败。
-解法：手机没有可用网络接口也没关系 —— adb reverse 会在**设备本机的 loopback**
-上开监听，不需要任何网络接口。于是：
-    1) 电脑跑本代理 (0.0.0.0:8080)
+Situation: the device has no working network interface (DHCP failure, no default route), so
+every request the app makes fails.
+
+Why this works: it does not need a network interface on the device at all. `adb reverse`
+opens a listener on the **device's own loopback**, which exists regardless:
+
+    1) run this proxy on the host        (0.0.0.0:8080)
     2) adb -s <serial> reverse tcp:8080 tcp:8080
-    3) 设备端 su -c "settings put global http_proxy 127.0.0.1:8080"
-    4) app 的 HTTP/HTTPS 流量经 USB 到电脑，由电脑代发
+    3) on the device: settings put global http_proxy 127.0.0.1:8080
+    4) the app's HTTP/HTTPS traffic travels over USB and is sent by the host
 
-支持：
-  - CONNECT 隧道（HTTPS 主用）
-  - 明文 HTTP 绝对 URI 转发
-仅做转发，不做 MITM（不解密 TLS，也不改流量），因此不干扰证书校验。
+Supports:
+  - CONNECT tunnelling (what HTTPS uses)
+  - absolute-URI plain HTTP forwarding
 
-用法：python usb_net_proxy.py [listen_port] [logfile]
+Forwards only: it does not MITM, does not decrypt TLS and does not modify traffic, so
+certificate validation is unaffected. See references/environment.md.
+
+Usage: python usb_net_proxy.py [listen_port] [logfile]
 """
 import socket
 import sys
@@ -39,7 +44,7 @@ def log(msg):
 
 
 def pump(a, b):
-    """a -> b 单向搬运，直到任一端关闭。"""
+    """Copy a -> b in one direction until either end closes."""
     try:
         while True:
             r, _, _ = select_select([a], [], [], 30)
@@ -105,7 +110,7 @@ def handle(client, addr):
             t.start()
             pump(remote, client)
         else:
-            # 明文 HTTP：target 一般是绝对 URI
+            # Plain HTTP: target is normally an absolute URI
             if target.startswith('http://'):
                 without = target[len('http://'):]
                 hostport = without.split('/', 1)[0]

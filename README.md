@@ -61,6 +61,10 @@ references/               loaded on demand, one topic each
   tls-and-cert.md             feature-scoped network failures: expired certs, dual trust chains
   third-party-builds.md       auditing a "cracked"/"modded" APK before trusting it
   dex-patching.md             patch-layer table + dexlib2 technique in depth
+  patch-audit.md              proving a patch *landed* and is *legal*: length-vs-bytes
+                              comparison, the equal-length-replacement blind spot, verifier-level
+                              legality (move-result adjacency) checked statically, text-matching
+                              patch traps, and reporting a missing patch
   repack-and-sign.md          repack rules, unpack-and-repack, signing, post-install hazards
   runtime-data.md             DataStore / SharedPreferences / SQLite / protobuf; when the app
                               rewrites your edit, and decoding a value that looks encrypted

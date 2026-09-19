@@ -690,3 +690,107 @@ runtime value (777 bytes) yields a build in which every signing parameter is `-1
 5. **Check the OAID/device-id path too** — it frequently hashes the same certificate separately.
 
 Full treatment: `references/signature-derived-keys.md`.
+
+---
+
+## P28. `logcat -c` does not clear the events buffer, so the previous build's crash looks like this build's
+
+**Symptom**
+
+After installing a fix, a search for the crash signature returns a hit. It looks like the fix did
+not work — and the "hit" is convincing, because it is the exact exception and the exact frame you
+were fixing.
+
+**Root cause**
+
+`adb logcat -c` clears `main`, `system` and `crash` **by default — not `events`**. The
+system's own crash record (`am_crash`, `am_proc_died`) lives in `events`. Reading `-b all`
+therefore pulls in the previous build's crash, which was never cleared.
+
+**How to tell it apart**
+
+Correlate **PID and wall-clock time** against the current process:
+
+- The PID in the record belongs to a process that is no longer running.
+- The timestamp **predates** the current process's start.
+
+Both together mean history, not a finding. (In the observed case the stale record's PID was the
+previous build's, and its timestamp was minutes before the current process started.)
+
+**Do instead**
+
+Pick one, and say which you used:
+
+- Bound the query by timestamp — accept only records after the current process started, or
+- Judge per buffer — `crash` is a fresh window after `-c`; `events` requires PID/time correlation.
+
+**The evidence window is itself a claim that needs support.** An unexamined stale window turns
+"fixed" into "still broken", and this one is invisible in the log's own text.
+
+---
+
+## P29. The patch landed and changed nothing, because the static data it edited is not the data the UI consumes
+
+**Symptom**
+
+Build is green. The patch is verifiably present in the artifact. The behaviour is unchanged.
+
+**Root cause**
+
+**The same type had two construction sites** — one for a static/default template, one inside the
+runtime conversion of a server response — and only the second one feeds the UI. Editing the first
+is a no-op that verifies cleanly and audits cleanly.
+
+**How to see it before shipping**
+
+From the type's constructor, count the call sites (`scripts/find_refs.py`), then ask of each:
+
+> **Is this one on the path the UI actually reads?**
+
+"It is constructed here" is not "it is consumed here". Two constructors of the same type can have
+completely different fates.
+
+**Do instead**
+
+- Patch the **consumer** — the loop that converts response items into the UI model — not the
+  static table.
+- Prefer a predicate over a **semantic discriminator** (a business code, a task type) rather than
+  a display string. The literal in the template is **not** necessarily the literal the server
+  sends: the string you want to match may not exist anywhere in the response.
+- If you cannot confirm the server-side value, **predicate on both candidate fields** rather than
+  betting on one.
+
+---
+
+## P30. Two observations that cannot distinguish the hypotheses, reported as a result
+
+**Symptom**
+
+A verification step "passes" or "fails" while having tested nothing.
+
+**Root cause**
+
+The observable is identical under both hypotheses, so the measurement carries no information.
+Real instance: a promotional banner was absent in the logged-in state, and that run was used to
+"verify" its removal — but the same banner is also absent in the logged-out state. Neither run
+could distinguish an effective patch from a no-op, and the second one was skipped as
+"uninformative" — correctly, since it could not have been informative either.
+
+**Do instead**
+
+Before running a verification, ask:
+
+> **What would this look like if the patch were absent?**
+
+If the answer is the same, the measurement is void. Record it as **"not applicable under this
+condition"**, never as "passed".
+
+Two close variants of the same error:
+
+- Treating **"the entry point is unreachable"** as proof of removal. The honest test is whether
+  the **request is still issued**: a UI element that no longer renders can still fire its network
+  call from elsewhere. Verify at the layer the behaviour actually lives on.
+- Treating **"the screenshot hash changed"** as proof that something rendered. A hash proves
+  *change*, never *what* changed — and it never proves *absence*. Look at the images: a status-bar
+  clock tick or a line of text reflowing changes the hash while a full-screen overlay would not
+  have been missed if the frames had actually been inspected.

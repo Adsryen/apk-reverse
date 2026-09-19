@@ -99,6 +99,7 @@ Load only what the current step needs.
 | `references/membership-and-limits.md` | Task involves VIP, subscription, paid content, unlock, "fully cracked" |
 | `references/server-api.md` | The behavior is decided by a response, or you need to know if a patch can even matter |
 | `references/dex-patching.md` | Any actual editing of dex/smali, choosing a patch layer, choosing a tool |
+| `references/patch-audit.md` | Proving a patch **landed**, or that it is **legal**: length-vs-bytes comparison, the equal-length blind spot, verifier-level legality (`move-result*` adjacency), text-matching patch traps, and how to report a missing patch |
 | `references/repack-and-sign.md` | Rebuilding, signing, installing, or a repacked app misbehaves |
 | `references/signature-derived-keys.md` | The app reads `signatures[0]`/`toCharsString()`, or a rebuilt APK installs and runs but every signed request fails (`sign`/`_p`/`uth` empty or `-1`) |
 | `references/runtime-data.md` | Local state matters: DataStore, SharedPreferences, SQLite, protobuf caches, tokens — **or your data edit keeps being reverted, or a stored value looks encrypted** |

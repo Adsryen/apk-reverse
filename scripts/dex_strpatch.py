@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""字节级定点 patch dex 里的字符串常量，完全不做 smali 往返。
+"""Byte-level, in-place patch of a string constant inside a dex — no smali round-trip.
 
-为什么不用 smali 往返：实测 classes7.dex 经 baksmali->smali 整树重建后，
-`io.ktor.client.engine.HttpClientEngine` 的 synthetic access bridge 被破坏，
-运行时报 IncompatibleClassChangeError（Found interface, but class was expected）。
-class_def 的 access_flags 看不出问题，所以只能改用"只改字节"的方式。
+Why not a smali round-trip: a disassemble -> reassemble of a whole tree can damage
+R8-optimized output in ways the class table does not show. Observed symptom: a synthetic
+access bridge lost its interface/class relationship, producing
+IncompatibleClassChangeError ("Found interface X, but class was expected") at runtime even
+though class_defs and access_flags looked untouched. See references/pitfalls.md P3.
 
-本脚本做法（对 dex 结构零改动）：
-  1. 把目标字符串替换成**等长**的另一个字符串 —— 长度相同则 string_data_item
-     的 uleb128 长度前缀不变，dex 的偏移、索引、表全部不变；
-  2. 重算 dex header 的 signature(SHA-1, 从 offset 32 起) 与 checksum(adler32, 从 offset 12 起)。
+What this script does instead (zero structural change to the dex):
+  1. Replaces the target string with another of **exactly equal byte length**. Equal length
+     keeps the string_data_item uleb128 length prefix unchanged, so offsets, indices and
+     every table stay exactly where they were.
+  2. Recomputes the dex header signature (SHA-1, from offset 32) and checksum (adler32,
+     from offset 12).
 
-用法：python dex_strpatch.py <in.dex> <out.dex> <old_str> <new_str>
-要求 len(new) == len(old)，且 old 在 dex 中出现次数恰好为 1。
+Use only when the replacement can be equal-length. Otherwise use a method-level dex API
+rewrite (references/dex-patching.md, technique 1).
+
+Usage: python dex_strpatch.py <in.dex> <out.dex> <old_str> <new_str>
+Requires len(new) == len(old) in UTF-8 bytes, and exactly one occurrence of old in the dex.
 """
 import hashlib
 import struct
@@ -46,11 +52,12 @@ def _read_strings(data):
 
 
 def _order_ok(data, off, ob, nb):
-    """检查把 ob 换成 nb 后是否仍满足 string_ids 的字典序约束。
+    """Check whether replacing `ob` with `nb` still satisfies the string_ids ordering rule.
 
-    注意：string_ids 里存的是 string_data_item 的偏移，也就是**长度前缀**的位置
-    （在 UTF-8 数据前若干字节），所以不能直接拿字符串数据偏移去匹配 ——
-    这里改为按内容匹配目标条目。
+    Note: string_ids stores the offset of each string_data_item — i.e. the position of the
+    **length prefix** (a few bytes ahead of the UTF-8 payload), not of the text itself — so
+    matching by string-data offset directly is not possible; this matches the entry by
+    content instead.
     """
     entries = _read_strings(data)
     idx = None
@@ -89,9 +96,11 @@ def main():
         return 1
     off = data.find(ob)
 
-    # 关键：dex 规范要求 string_ids 表按字符串内容有序。等长替换虽然不动偏移，
-    # 但会改变该条目在表中的字典序位置 —— 一旦越界，整个 dex 会被 ClassLoader
-    # 拒绝（表现为 ClassNotFoundException: <Application>）。所以这里先做区间校验。
+    # The dex spec requires string_ids to be ordered by string content. An equal-length
+    # replacement moves no offset, but it does change where this entry sits in that ordering
+    # — and once it lands out of order the whole dex is rejected by the ClassLoader
+    # (symptom: ClassNotFoundException naming the Application class). So validate the
+    # interval before writing.
     if not _order_ok(data, off, ob, nb):
         print('[FAIL] replacement would break string_ids ordering. '
               'Pick a string that stays between its two neighbours.')

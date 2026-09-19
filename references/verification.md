@@ -48,6 +48,8 @@ access_flags diff (same interface-ness): 0
 
 Caveat, and it is an important one: **this check cannot detect code-item damage.** A whole-tree smali round-trip can pass every table check and still crash with `IncompatibleClassChangeError` (`pitfalls.md` P3). Passing this check is necessary, not sufficient.
 
+The checks that *can* see further — instruction-length auditing, the equal-length-replacement blind spot, and verifier-level legality (`move-result*` adjacency) — are in `references/patch-audit.md`. Use them before claiming a patch landed.
+
 Also confirm you changed what you intended and nothing more:
 - Reverse the patched dex and inspect the target method.
 - Compare unmodified classes byte-for-byte against the original where feasible.
