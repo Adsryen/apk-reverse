@@ -3,6 +3,10 @@
 Load this when the Java/dex layer is blocked or unsuitable, when you need code to run **before** the app's
 own code, or when a native library is the only editable place left.
 
+If instead the problem is that the app **dies on its own** — hangs, restarts, or crashes natively at a
+roughly constant time after launch — that is a terminate mechanism, not a hooking problem, and the
+methods differ: read `native-tamper-and-suicide.md` before this file.
+
 The Java layer is usually the right choice. Go native when you need one of these:
 
 - execution **earlier than any app code** (before `Application.onCreate`, before static initialisers),

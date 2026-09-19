@@ -29,6 +29,12 @@ directly.
   than trusting what the manifest ships or what the device claims.
 - Working through **packed/hardened targets**: identifying the packer, unpacking, and turning a
   memory dump back into a patched, installable APK.
+- Handling a **hardened library that terminates the process on purpose** — including the
+  deliberate-crash shape (`fault addr 0x4`) that looks exactly like an ordinary null-dereference
+  bug, and the "neutralise it, but never by making it *not return*" rule that decides whether the
+  fix works or freezes the whole app in a way that looks nothing like the cause.
+- Knowing **which tools to reach for and where each one lies** — including the ones that only
+  exist as a GUI, so you ask for a human instead of silently substituting a weaker method.
 - Keeping a **long task honest**: a live record, graded conclusions, calibrated timeouts, and
   bounded waits, so progress is not lost and the same mistake is not made twice.
 - Avoiding the specific mistakes that produce an APK that builds perfectly and dies at
@@ -50,6 +56,12 @@ references/               loaded on demand, one topic each
   native-and-so.md            .so hosts, DT_NEEDED vs JNI_OnLoad, relocation limits,
                               relocation-free bootstrapping, replacing Java methods natively,
                               and which ABI/library is *actually loaded and executing*
+  native-tamper-and-suicide.md  how a hardened library kills its own process: the visible
+                              mechanisms, how to tell which one actually fires, how to find the
+                              site, forged section headers, function boundaries from
+                              PT_GNU_EH_FRAME, scanner traps, and neutralising safely
+  toolchain.md                what to install, how to invoke it non-interactively, which tools
+                              are GUI-only, version-alignment traps, working offline
   long-task-discipline.md     live record, conclusion grading, drift control, timeout and
                               wait calibration, deliverable-form drift, handover
   ad-removal.md               ad taxonomy, wrapper mapping, callback trap, global gates, verification
@@ -100,6 +112,14 @@ scripts/                  parameterized, path-agnostic
   lib_map.py                  what is *actually mapped* into a live process: per-library path,
                               base, architecture, and whether it came from the APK or was
                               materialized at runtime
+  elf_plt.py                  resolve a PLT stub to its imported symbol (x86_64 + aarch64) from
+                              the relocation table; list a symbol's callers; byte-diff two
+                              libraries and name the symbol each changed stub belongs to
+  apk_diff.py                 entry-level diff of two builds: changed / added / removed, by
+                              content hash so same-size replacements are caught
+  native_crash.py             locate a native death from a log or tombstone: signal, fault
+                              address, registers, frames split app vs system, the faulting
+                              instruction, and a flag when the fault looks *arranged*
   blob_decode.py              search, don't guess, the framing of a stored value
                               (base64/hex x rotation x deflate); re-encode the edited payload
   snap.py                     bounded burst screenshots + control-tree capture with a stall
@@ -139,7 +159,7 @@ Nothing is mandatory; each script checks what it needs.
 `references/pitfalls.md`. It is the most valuable file here — every entry is a failure
 that produced a broken artifact while looking completely healthy.
 
-The three that hurt most:
+The four that hurt most:
 
 1. Stripping the whole `META-INF/` during a repack deletes ServiceLoader registrations
    and the app dies at startup with an error that names an unrelated library.
@@ -147,6 +167,9 @@ The three that hurt most:
    dex rejected, while checksums and signatures verify perfectly.
 3. Rebuilding a dex with a whole-tree smali round-trip damages R8 output invisibly —
    class tables compare clean, and it only blows up at runtime.
+4. Neutralising a native terminate path by making it **not return**. A spinning stub does not
+   suppress the check; it freezes the caller and every thread behind it. The app hangs with *no
+   crash record at all*, and the eventual death gets blamed on whatever killed the frozen process.
 
 ## Scope
 

@@ -134,6 +134,13 @@ The cheapest high-value experiment, and one that is routinely skipped: run the *
 build** and the **repackaged build** through the *same* probe and diff what differs. The difference is
 your detection signal. Doing this early is far cheaper than enumerating candidate checks one by one.
 
+**When the symptom is a death rather than a dialog** — the process disappears, hangs, or dies at a
+roughly constant time after launch — the check is not drawing anything, it is terminating. The
+question then becomes *which mechanism*, and the answer decides the whole approach:
+`native-tamper-and-suicide.md` covers how to tell an imported terminate call from an **arranged
+fault** (which calls nothing and therefore defeats every PLT-level fix), how to find the site, and
+why making a routine "not return" freezes the process instead of suppressing the check.
+
 ## Reporting
 
 State the boundary you measured, the evidence for each entry, and what remains untested. "The shell

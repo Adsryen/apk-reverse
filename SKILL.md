@@ -57,10 +57,20 @@ Answer these before touching a tool. Every one of them changes the whole plan.
     routine, the rebuilt APK must hardcode the *original* certificate value at every read site, or
     every signed request fails while the app still launches and looks healthy. This is the single
     most expensive silent failure in a repack, and 15 minutes of grep prevents it.
+11. **Does the app die on its own after a while — with no Java stack trace, or with a native
+    crash that looks like a bug?**
+    → `references/native-tamper-and-suicide.md`. A hardened library that decides the build is
+    tampered rarely calls `kill`. It more often **arranges a fault** (load a small constant, use it
+    as a pointer) so the death looks like an ordinary defect, and the system then reports it as an
+    app "crash" or "abnormal" dialog. Two rules before you touch anything: **enumerate which
+    mechanism actually fires** (the signal and the tombstone split them apart), and **neutralise by
+    returning, never by making it not return** — a spinning stub freezes the process and produces a
+    symptom that looks nothing like the cause.
 
 ## The workflow, end to end
 
 1. **Preflight, then Recon** — `scripts/preflight.py` before anything else if a device is involved (it takes seconds and prevents a whole class of false conclusions), then `references/recon.md`. Manifest, package name, version, ABI, dex count, packer, embedded SDKs, where the app's own code lives. Ten minutes here saves hours. **If it is packed, unpack before anything else** (`references/recon.md` §unpacking): you cannot patch code you cannot read, the encrypted payload lengths tell you which dumped dex is the original, and a memory dump must be de-duplicated by hash and structurally validated before any of it is trusted.
+   **If the app already dies on its own** — especially at a roughly constant time after launch, or with a native crash — locate the mechanism *before* planning any patch (`references/native-tamper-and-suicide.md`, `scripts/native_crash.py`). Record the observed time-to-death: it is the baseline every later attempt is measured against, and without it a surviving run cannot be told from a changed schedule.
 2. **Extract strings and endpoints** — build a picture of the app's API surface and SDK inventory from the dex string tables. No decompiler needed for this, and it is fast. Scripts: `scripts/dex_strings.py`.
 3. **Trace to the owning class** — find the class that wraps the behavior (the app almost always wraps third-party SDKs in one helper). Reverse-lookup instructions: `references/dex-patching.md` §finding-the-call-site.
 4. **Decide the patch layer** — client SDK call / client rendering / client data consumption / server contract. See the table in `references/ad-removal.md`.
@@ -76,6 +86,7 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 - **Verify structure after every dex edit.** `scripts/dex_classdiff.py` must report zero differences in class set and access flags for classes you did not intend to change.
 - **Do not patch a method that is widely shared.** Before patching any helper, count its callers (`scripts/find_refs.py`). A `Long.valueOf` wrapper with 30 callers is not an ad-specific hook.
 - **Do not make an API fail to suppress a UI element.** A 404/400 on an endpoint that other features depend on takes the whole screen down with it. Suppress at the data-consumption or render layer instead.
+- **Neutralise a native terminate path by returning, never by making it not return.** A stub, stub patch, or function entry replaced with a spin or a self-branch does not suppress the check — it freezes the caller, holding whatever lock it had, and unrelated threads wedge behind it. The symptom (a hang, an external kill, a restart loop) looks nothing like the cause, and there is no crash record to explain it. Return a benign value, and prefer success (0) over failure (-1). Never touch the ordinary-path symbols (`pthread_exit`, `exit`, `abort`, `snprintf`, `closedir`). `references/native-tamper-and-suicide.md`
 - **Look before you conclude — and look while you wait.** Execute, capture, and **inspect**; do not drive and sleep blind. A screen that is actually looked at answers in one step what coordinate-guessing cannot answer in five: the layout moved, a different dialog is up, a countdown is frozen, the text on screen says exactly why. Where the thing you are waiting on is visible, a sample you can inspect beats a duration you hoped was right, and byte-identical samples mean nothing is going to change. `scripts/snap.py`; `references/environment.md` §look at the screen.
 - **Put a timeout on every command, and calibrate it from measurement.** An unbounded call turns a stall into "the task stopped making progress", which is indistinguishable from slow work and costs hours silently. Time the operation once, record it, then derive the bound from it — that is what makes slow and hung distinguishable. A deadline that passes is a measurement, not a verdict. `references/long-task-discipline.md` §bound every wait.
 - **Every claim needs evidence.** "Probably", "should be", "in theory" are not findings. Either you observed it, or you label it unverified.
@@ -95,6 +106,8 @@ Load only what the current step needs.
 | `references/framework-runtimes.md` | The UI is not native (Flutter / React Native / Unity / Cordova), or Java-layer hooks fire zero times while the UI clearly works |
 | `references/dart-aot.md` | The logic lives in a Dart AOT snapshot (`libapp.so`): pinning the Dart version, building a matching decompiler, the object pool and reference indexing, register/boolean conventions, locating and patching Dart code |
 | `references/native-and-so.md` | Patching in a `.so`, needing code to run before the app's own code, hand-built native payloads that crash inside the linker, or **deciding which library/ABI is actually loaded and executing** |
+| `references/native-tamper-and-suicide.md` | The process dies on its own (no Java stack, or a native crash that looks like a bug); you are about to neutralise a `kill`/`exit`/`abort` path; or a hardened library's sections/function boundaries look wrong |
+| `references/toolchain.md` | Choosing or invoking tools, something is not installed, a tool's output smells wrong, or you need to know which tools exist only as a GUI |
 | `references/ad-removal.md` | Task involves ads, trackers, sponsored cards, splash/interstitial/reward |
 | `references/membership-and-limits.md` | Task involves VIP, subscription, paid content, unlock, "fully cracked" |
 | `references/server-api.md` | The behavior is decided by a response, or you need to know if a patch can even matter |
@@ -138,6 +151,9 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/tls_check.py` | Strict certificate check for one or more hosts (expired / wrong host / untrusted CA) |
 | `scripts/preflight.py` | Read-only environment check before every experiment block: device, root, ABI/translation, clock skew, leftover proxy/forwards, dead device server. Run this before blaming a patch. |
 | `scripts/lib_map.py` | What is **actually mapped** into a live process: per-library path, base, architecture (`ELF e_machine`), and classification (system / from-APK / runtime-materialized). Answers "which library and which ABI is really executing". |
+| `scripts/elf_plt.py` | Resolve a PLT stub to its imported symbol on x86_64 and aarch64 (from the **relocation table**, not from position or a comment), list a symbol's callers, and **byte-diff two libraries naming the symbol each changed stub belongs to**. Run this before patching any stub, and to audit a patch set you inherited. |
+| `scripts/apk_diff.py` | Entry-level diff of two APKs: what changed, what was **added** (injection candidates), what was removed — by content hash, so same-size replacements are caught. Use it to audit a third-party build and to prove your own build was surgical. |
+| `scripts/native_crash.py` | Locate a native death from a logcat capture or tombstone: signal, fault address, register state, backtrace split into your libraries vs system, the faulting instruction — plus an explicit flag when the fault looks **arranged** rather than accidental. |
 | `scripts/blob_decode.py` | Decode an opaque stored value by searching the parameter space (base64/base64url/hex × rotation × deflate/zlib/gzip) instead of guessing, then re-encode an edited payload with the same parameters. |
 | `scripts/snap.py` | Bounded burst screenshot + control-tree capture, with a stall detector and an explicit verdict on whether the accessibility tree is usable at all. Use it so you *look* at the screen instead of driving blind. |
 | `scripts/sig_probe.py` | Find the exact `signatures[0].toCharsString()` value: offline candidate enumeration from an APK (`--apk`), or the authoritative value read from a live package (`--live`). Feed the result into the hardcoded constant described in `references/signature-derived-keys.md`. |
