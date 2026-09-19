@@ -9,11 +9,47 @@ Ten minutes here prevents hours of wrong work. Answer the five questions from `S
 aapt dump badging app.apk | head -20
 # or, from the extracted manifest:
 #   package name, versionName, versionCode, sdkVersion, targetSdkVersion
+# or, if you have ddc (no JVM, single binary, also gives the launcher):
+ddc info app.apk
 ```
 
 Record: package name, version name/code, min/target SDK, all requested permissions, all declared components.
 
+**Do not hand-parse the package name out of the binary manifest as your primary
+source.** Real AXML string tables are full of class-name fragments that look
+exactly like package names — in one sample, the strings visible without a real
+parser suggested `com.<app>.offline` (a service class prefix) while the actual
+package was `com.<vendor>.app`. Every later `pm list packages`,
+`dumpsys package`, `/data/data/<pkg>` and `pm install` command depends on this
+value, so getting it wrong sends the whole recon down a path where nothing is
+found and the natural conclusion is "the tool is broken".
+
+Cross-check two independent sources and require agreement:
+
+- `ddc info app.apk` → `package`, `label`, `launcher`
+- `aapt2 dump badging app.apk | head -1` (or `aapt dump badging`)
+
+If they disagree, resolve it before proceeding. A single `label` value is also
+worth having: it is what appears on the launcher, which makes device-side
+identification unambiguous later.
+
 **Note:** some `aapt` builds choke on non-ASCII paths. Normalize sample paths to ASCII before running tooling.
+
+## 1b. Snapshot the config surface early
+
+If the app has a remote-config endpoint, its DTOs are the cheapest thing in the
+package to find, because data classes serialise their own field names into strings
+that survive R8:
+
+```bash
+ddc findrefs app.apk string "SplashConfig"       # or Config, Popup, Banner, Tabbar...
+ddc strings app.apk -f "enabled" --with-locations
+```
+
+Do this during recon rather than later: it tells you immediately whether the
+launch screen, popups and tab set are **client decisions** or **server data**,
+which is the difference between a five-minute patch and a dead end. See
+`server-config-and-updates.md`.
 
 ## 2. Is it packed?
 
@@ -28,6 +64,14 @@ Read `AndroidManifest.xml` → `application android:name`.
 | A shell library in `lib/<abi>/` (`libDexHelper.so`, `libjiagu*.so`, `libshell*.so`, …) | Native half of the shell: decrypts and loads the payload. |
 | One or more large high-entropy `assets/` blobs, possibly **disguised as JPEG** (valid magic bytes, no decodable image) | Encrypted payload. |
 | `assets/` contains a second `.apk` or `.jar` | Wrapped/loader build. |
+
+**A clean shape is also a result: record it and move on.** An app whose
+`application android:name` is its own class, with a single plain `classes.dex` and
+no native libraries, is directly editable — and that finding is what lets you skip
+the entire packer/unpack branch of this skill. It is worth one explicit line in the
+record ("no packer: application is the app's own class; dex readable; no lib/") so
+that later steps cannot re-open a question that was already answered. Most real
+targets are this shape; the packer material in this repository exists for the rest.
 
 Decide from sizes and structure, not from names:
 

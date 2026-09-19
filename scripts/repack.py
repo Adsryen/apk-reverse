@@ -208,10 +208,26 @@ def build_unsigned(apk, repl, out_apk, drop_signatures=True):
         IllegalStateException: Module with the Main dispatcher is missing ...
     and the message never points at META-INF, so the cause is very hard to find.
     Therefore: drop signature artifacts only, keep every META-INF subdirectory.
+
+    ALIGNMENT. Writing the entries with a plain zipfile writer produces an archive
+    Android R+ refuses to install:
+
+        Failure [-124: Failed parse during installPackageLI: Targeting R+ (version
+        30 and above) requires the resources.arsc of installed APKs to be stored
+        uncompressed and aligned on a 4-byte boundary]
+
+    Two independent requirements hide in that message: `resources.arsc` must be
+    STORED (not deflated), and its data must start at a 4-byte boundary. The same
+    applies to uncompressed `lib/*.so`. Python's zipfile cannot express an entry
+    offset, so this writer emits the local headers itself and pads the local extra
+    field to hit the boundary.
     """
     seen = set()
     replaced_names = set(repl)
-    with zipfile.ZipFile(apk, 'r') as zin, zipfile.ZipFile(out_apk, 'w', zipfile.ZIP_DEFLATED) as zout:
+
+    # Collect (name, source, data, keep_stored) in output order.
+    plan = []
+    with zipfile.ZipFile(apk, 'r') as zin:
         for item in zin.infolist():
             name = item.filename
             base = os.path.basename(name)
@@ -222,32 +238,208 @@ def build_unsigned(apk, repl, out_apk, drop_signatures=True):
                 continue
             if name in replaced_names:
                 continue
-            data = zin.read(name)
-            keep = name in STORE_ONLY or base in STORE_ONLY
-            zi = zipfile.ZipInfo(name, date_time=item.date_time)
-            zi.compress_type = zipfile.ZIP_STORED if keep else zipfile.ZIP_DEFLATED
-            zi.external_attr = item.external_attr
-            zi.internal_attr = item.internal_attr
-            zi.create_system = item.create_system
-            zout.writestr(zi, data)
-            seen.add(name)
-        for name, path in sorted(repl.items()):
-            with open(path, 'rb') as fh:
-                data = fh.read()
-            zi = zipfile.ZipInfo(name, date_time=(2024, 1, 1, 0, 0, 0))
-            zi.compress_type = zipfile.ZIP_DEFLATED
-            zout.writestr(zi, data)
-            log('[zip] + %s  (%d bytes <- %s)' % (name, len(data), path))
-            seen.add(name)
+            plan.append((name, item, zin.read(name),
+                         name in STORE_ONLY or base in STORE_ONLY))
+    for name, path in sorted(repl.items()):
+        with open(path, 'rb') as fh:
+            data = fh.read()
+        info = zipfile.ZipInfo(name, date_time=(2024, 1, 1, 0, 0, 0))
+        plan.append((name, info, data, False))
+        log('[zip] + %s  (%d bytes <- %s)' % (name, len(data), path))
+
+    _write_aligned_zip(out_apk, plan)
+    seen.update(name for name, _i, _d, _k in plan)
     return seen
 
 
-def zip_report(apk):
-    rows = []
-    with zipfile.ZipFile(apk, 'r') as z:
+ALIGN = 4
+# Entries Android requires to be STORED, and (for some) 4-byte aligned.
+ALIGNED_STORED = ('resources.arsc',)
+ALIGNED_PATTERNS = (re.compile(r'^lib/[^/]+\.so$'),)
+FILLER_NAME = 'META-INF/ALIGN.RSV'
+
+
+def _needs_alignment(name):
+    if name in ALIGNED_STORED:
+        return True
+    return any(p.match(name) for p in ALIGNED_PATTERNS)
+
+
+def _dos_word(dt):
+    """(time, date) MS-DOS words for a zip local header."""
+    y, mo, d, h, mi, s = dt
+    if y < 1980:
+        y, mo, d, h, mi, s = 1980, 1, 1, 0, 0, 0
+    return (h << 11) | (mi << 5) | (s // 2), ((y - 1980) << 9) | (mo << 5) | d
+
+
+def _local_header(nlen, method, crc, csize, usize, dt, flags=0, extralen=0):
+    t, dd = _dos_word(dt)
+    import struct
+    return struct.pack('<IHHHHHIIIHH', 0x04034B50, 20, flags, method,
+                       t, dd, crc, csize, usize, nlen, extralen)
+
+
+def _deflate_raw(data):
+    """Raw deflate (no zlib wrapper), which is what a zip method-8 entry holds.
+
+    zlib.compress() prepends a 2-byte zlib header. Some readers tolerate it, some
+    do not, and the failure reads as a corrupt entry rather than a bad compressor
+    call, so use wbits=-15 and get it right the first time.
+    """
+    import zlib
+    c = zlib.compressobj(9, zlib.DEFLATED, -15)
+    return c.compress(data) + c.flush()
+
+
+def _write_aligned_zip(out_path, plan):
+    """Write a zip whose STORED entries can be relied on for offset alignment.
+
+    Padding rule, and why it is not just `(-offset) % 4`: a zip extra area is a
+    sequence of (id, size, payload) records, so its minimum useful length is 4
+    bytes. A required pad of 1-3 bytes therefore CANNOT be expressed in the extra
+    field. When that happens this writer inserts a stored filler entry of exactly
+    the needed size instead -- the filler has a computable size, so the following
+    entry still lands on the boundary.
+    """
+    import struct
+    import zlib
+
+    order = []
+    meta = {}
+    offset = 0
+    scratch = out_path + '.tmp'
+
+    with open(scratch, 'wb') as out:
+        for name, info, data, keep_stored in plan:
+            name_b = name.encode('utf-8')
+            if keep_stored:
+                method, payload = 0, data
+            else:
+                method, payload = 8, _deflate_raw(data)
+            crc = zlib.crc32(data) & 0xFFFFFFFF
+
+            # reach the boundary before the local header of an aligned entry
+            if _needs_alignment(name):
+                need = (ALIGN - ((offset + 30 + len(name_b)) % ALIGN)) % ALIGN
+                if need in (1, 2, 3):
+                    off2, fill_meta = _emit_filler(out, offset, need)
+                    order.append(FILLER_NAME)
+                    meta[FILLER_NAME] = fill_meta
+                    offset = off2
+
+            extra, extralen = b'', 0
+            if _needs_alignment(name):
+                head = 30 + len(name_b)
+                if (offset + head) % ALIGN != 0:
+                    # expressible pad: one (id,size,payload) record >= 4 bytes
+                    pad = (ALIGN - ((offset + head) % ALIGN)) % ALIGN
+                    if pad < 4:
+                        pad += ALIGN
+                    extra = b'\xfe\xca' + struct.pack('<H', pad - 4) + b'\x00' * (pad - 4)
+                    extralen = len(extra)
+
+            flags = getattr(info, 'flag_bits', 0)
+            local_header_offset = offset          # the CD points at the HEADER
+            out.write(_local_header(len(name_b), method, crc, len(payload),
+                                    len(data), info.date_time, flags, extralen))
+            out.write(name_b)
+            out.write(extra)
+            data_off = offset + 30 + len(name_b) + extralen
+            if out.tell() != data_off:
+                raise RuntimeError('offset bookkeeping drift for %s' % name)
+            if _needs_alignment(name) and data_off % ALIGN != 0:
+                raise RuntimeError('%s not aligned: data at 0x%x' % (name, data_off))
+            out.write(payload)
+            offset = out.tell()
+
+            order.append(name)
+            meta[name] = {'name_b': name_b, 'method': method, 'crc': crc,
+                          'csize': len(payload), 'usize': len(data),
+                          'local_offset': local_header_offset,
+                          'date_time': info.date_time, 'flag_bits': flags,
+                          'external_attr': getattr(info, 'external_attr', 0)}
+
+        cd_start = out.tell()
+        for name in order:
+            m = meta[name]
+            t, dd = _dos_word(m['date_time'])
+            # central directory: sig, ver_made, ver_need, flags, method, time,
+            # date, crc, csize, usize, namelen, extralen, commentlen, disk,
+            # int_attr, ext_attr, local_header_offset
+            out.write(struct.pack(
+                '<IHHHHHHIIIHHHHHII', 0x02014B50, 20, 20, m.get('flag_bits', 0),
+                m['method'], t, dd, m['crc'], m['csize'], m['usize'],
+                len(m['name_b']), 0, 0, 0, 0,
+                (m['external_attr'] >> 16) & 0xFFFF, m['local_offset']))
+            out.write(m['name_b'])
+        cd_size = out.tell() - cd_start
+        out.write(struct.pack('<IHHHHIIH', 0x06054B50, 0, 0, len(order), len(order),
+                              cd_size, cd_start, 0))
+
+    shutil.move(scratch, out_path)
+    return order
+
+
+def _emit_filler(out, offset, size):
+    """Insert a stored, zero-filled entry of exactly `size` payload bytes."""
+    import struct
+    import zlib
+    name_b = FILLER_NAME.encode('utf-8')
+    payload = b'\x00' * size
+    crc = zlib.crc32(payload) & 0xFFFFFFFF
+    out.write(_local_header(len(name_b), 0, crc, size, size, (1980, 1, 1, 0, 0, 0)))
+    out.write(name_b)
+    out.write(payload)
+    return out.tell(), {'name_b': name_b, 'method': 0, 'crc': crc,
+                        'csize': size, 'usize': size,
+                        'local_offset': offset,
+                        'date_time': (1980, 1, 1, 0, 0, 0), 'external_attr': 0}
+
+
+def check_alignment(apk):
+    """Report storage + 4-byte alignment of the entries Android insists on.
+
+    Returns a list of complaint strings; empty means the install gate is satisfied.
+    """
+    import struct
+    bad = []
+    with zipfile.ZipFile(apk, 'r') as z, open(apk, 'rb') as fh:
         for i in z.infolist():
-            if i.filename in STORE_ONLY or os.path.basename(i.filename) in STORE_ONLY:
-                rows.append('%s method=%d (0=STORED)' % (i.filename, i.compress_type))
+            if not (i.filename in ALIGNED_STORED or _needs_alignment(i.filename)):
+                continue
+            fh.seek(i.header_offset)
+            lh = fh.read(30)
+            nlen, elen = struct.unpack('<HH', lh[26:30])
+            data_off = i.header_offset + 30 + nlen + elen
+            if i.compress_type != 0:
+                bad.append('%s is compressed (method=%d); Android R+ requires '
+                           'STORED' % (i.filename, i.compress_type))
+            if i.filename != FILLER_NAME and data_off % ALIGN != 0:
+                bad.append('%s data offset 0x%x is not %d-byte aligned'
+                           % (i.filename, data_off, ALIGN))
+    return bad
+
+
+def zip_report(apk):
+    """Entry summary, including the storage/alignment facts Android gates on."""
+    import struct
+    rows = []
+    with zipfile.ZipFile(apk, 'r') as z, open(apk, 'rb') as fh:
+        for i in z.infolist():
+            base = os.path.basename(i.filename)
+            needs = (i.filename in STORE_ONLY or base in STORE_ONLY
+                     or _needs_alignment(i.filename))
+            if needs:
+                fh.seek(i.header_offset)
+                lh = fh.read(30)
+                nlen, elen = struct.unpack('<HH', lh[26:30])
+                data_off = i.header_offset + 30 + nlen + elen
+                verdict = 'aligned' if data_off % ALIGN == 0 else 'NOT ALIGNED'
+                stored = 'STORED' if i.compress_type == 0 else \
+                    'COMPRESSED(method=%d)' % i.compress_type
+                rows.append('%-40s %-22s offset=0x%-8x %s'
+                            % (i.filename, stored, data_off, verdict))
             if re.match(r'^classes\d*\.dex$', i.filename):
                 rows.append('%s %d bytes method=%d crc=%08x' % (
                     i.filename, i.file_size, i.compress_type, i.CRC))
@@ -448,6 +640,15 @@ def main():
     log('== zip layout of final apk')
     for row in zip_report(out):
         log('   ' + row)
+    alignment_problems = check_alignment(out)
+    if alignment_problems:
+        log('== ALIGNMENT/STORAGE GATE FAILED -- do not ship this build:')
+        for p in alignment_problems:
+            log('   - %s' % p)
+        log('   Android R+ (targetSdk 30+) refuses to install an APK whose '
+            'resources.arsc is compressed or not 4-byte aligned.')
+    else:
+        log('== alignment gate: resources.arsc STORED and 4-byte aligned (OK)')
 
     ok = verify_apk(out, tools, signer_jar, expect_signed=not args.no_sign)
     if not args.no_sign:

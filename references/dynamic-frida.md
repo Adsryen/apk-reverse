@@ -403,6 +403,34 @@ Countermeasures, in order of least disruption:
 
 **Remember:** most `frida`/`root` strings in a decompiled APK belong to third-party SDKs' own detection lists, not to the app. Verify that **app code** references them before doing anti-anti work.
 
+### When live attach cannot work at all
+
+Sometimes nothing short of "do not inject at runtime" is viable — the check runs
+before your hooks can, it watches its own process, or the environment forbids
+`ptrace`. Do not keep escalating on the same axis. There are non-live ways to get
+runtime-grade information, and they are often enough to finish the job:
+
+| Alternative | What it gives you | Cost |
+|---|---|---|
+| **Static instrumentation** — load a gadget/small agent by modifying the APK (e.g. an injected `Application` wrapper, a gadget `.so` added to `lib/<abi>/` and wired from the manifest) | Hooks run from process start with no external attach, no `ptrace`, no server process on the device to be found | Must repack and re-sign; the build you observe is no longer byte-identical to the original, so **it cannot serve as the unmodified control** (`verification.md` §the control build rule) |
+| **Static read of the answer** — the check's inputs are usually visible: the field it reads, the string it compares, the response field it trusts | Often enough to plan a patch without ever observing | You do not learn the live values; combine with `runtime-data.md` for local state |
+| **Self-recorded evidence** — the app's own cached responses, logs, or on-disk state | Real runtime data with no injection at all (a HTTP cache, a pref, a JSON snapshot left behind by a normal launch) | Only what the app happened to persist; needs one clean launch and then a filesystem read |
+
+The last one is worth remembering because it is the cheapest and it is easy to
+forget: a normally-launched app often leaves the exact runtime data you wanted —
+server responses in its HTTP cache, config in a preferences file, feature state in
+a snapshot. Read those **before** concluding that dynamic analysis is blocked.
+
+**Two cautions that apply to every alternative above:**
+
+- **Changed bytes change behaviour.** Any injected build is a different artifact,
+  and on a target that fingerprints its own layout that difference is the finding,
+  not the app's real behaviour. Always keep the unmodified run as the control.
+- **Evidence from a different environment is a different claim.** A result obtained
+  with the app patched-for-injection, or on a device with different privilege state,
+  supports "verified under condition X". Say so; do not present it as the app's
+  unmodified behaviour (`long-task-discipline.md` §the most expensive drift).
+
 ## What to capture for the record
 
 - spawn time, hook-ready time, resume time

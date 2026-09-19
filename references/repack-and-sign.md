@@ -24,6 +24,42 @@ def is_signature_entry(name):
 
 Recompressing them produces builds that fail to install or misbehave.
 
+**2a. `resources.arsc` must ALSO be 4-byte aligned, and the failure is an install refusal.**
+
+On Android 11+ (targetSdk 30+) the package manager rejects the install outright:
+
+```
+Failure [-124: Failed parse during installPackageLI: Targeting R+ (version 30 and
+above) requires the resources.arsc of installed APKs to be stored uncompressed and
+aligned on a 4-byte boundary]
+```
+
+Two independent requirements hide in that one sentence: STORED, and the entry's
+**data offset** divisible by 4. Uncompressed `lib/*.so` follows the same rule.
+
+A naive `zipfile.ZipFile(...).writestr(...)` loop satisfies neither reliably:
+Python's zip writer gives you no control over entry offsets. `scripts/repack.py`
+therefore emits local headers itself and pads the **local extra field** to reach
+the boundary. The padding arithmetic has one trap worth knowing:
+
+> A zip extra area is a sequence of `(id, size, payload)` records, so its minimum
+> useful length is 4 bytes. A required pad of **1-3 bytes cannot be expressed**.
+> When the natural pad falls in that range, insert a stored filler entry of
+> exactly that size instead -- the filler has a computable size, so the following
+> entry still lands on the boundary.
+
+Verify by reading the archive, not by trusting the writer: for each entry Android
+cares about, parse its local header, compute `header_offset + 30 + namelen +
+extralen`, and check `compress_type == 0` and `offset % 4 == 0`.
+`repack.py` prints exactly this ("alignment gate") and `check_alignment()`
+returns the complaint list programmatically.
+
+**Do not plan on repairing alignment with `zipalign` after the fact when you can
+produce a correct archive directly.** A post-hoc pass rewrites the file; on a
+target that fingerprints its own byte layout, that is a much larger change surface
+than writing it correctly the first time. Keep `zipalign -c -v 4` as an
+independent check when the tool is available.
+
 **3. Keep the APK's zip entry metadata.** Preserve `compress_type`, `external_attr`, `date_time` for entries you copy through.
 
 **4. Changing any dex changes nothing about resources.** If you only edited dex, do not touch `res/`, `assets/`, or `lib/`.
@@ -49,6 +85,34 @@ If you must avoid resource churn entirely, decode with `-s` (do not decode resou
 rebuild what you changed.
 
 **5. Signing creates new `MANIFEST.MF`/`*.SF`/`*.RSA`.** That is expected — the check is that **no signature artifact from the ORIGINAL** survives, and **no non-signature entry was lost**.
+
+**6. Any dex you edited must have its header integrity fields recomputed.**
+Every dex carries two fields that cover the rest of the file:
+
+```
+bytes 12..32 = sha1(data[32:])        # signature — must be computed FIRST
+bytes  8..12 = adler32(data[12:])     # checksum — covers the signature, so it is LAST
+```
+
+Skipping this does not always stop the app from starting, which is what makes it
+dangerous. Android logs
+`Failure to verify dex file ...: Bad checksum (computed, expected)` — the real
+value appears as "expected", which reads backwards — and then falls back to
+interpreting the dex instead of using a verified image. The visible symptom is an
+unrelated startup failure such as `ClassNotFoundException` for an ordinary class
+(the Application class, or a small AndroidX component), so the trail points at the
+APK structure rather than at two stale header words.
+
+`scripts/dexutil.py` exposes `fix_dex_header()` (correct order, plus
+`verify_dex_header()` so you can assert the result), and
+`scripts/dex_patch_bytes.py` runs both automatically before writing.
+
+**7. `jarsigner` rewrites the archive; `apksigner` does not.**
+
+Adding a v1 JAR signature with `jarsigner` recompresses entries as a side effect,
+which **destroys the alignment from rule 2a**. The signature still verifies, so the
+build looks correct until the install is refused with `[-124]`. Sign with
+`apksigner` (v1+v2+v3) unless you have a specific reason not to.
 
 ## Repacking an unpacked (de-shelled) app
 
@@ -132,12 +196,61 @@ Always pass the explicit range (Route B above) and read the scheme list from tha
 | Situation | Command |
 |---|---|
 | Same signing key as installed version | `pm install -r` — keeps app data (login state, caches) |
-| Different signing key | `pm uninstall` first, then install. **App data is lost.** |
-| OEM installer refuses (`INSTALL_FAILED_*`, vendor restrictions) | push the APK and install via root: `su -c 'pm install -r -t -d /data/local/tmp/app.apk'` |
+| Different signing key | `pm uninstall` first, then install. **App data is lost** — say so in the delivery notes |
+| OEM installer refuses (`INSTALL_FAILED_*`, vendor restrictions, a bare negative code) | push the APK and install via root: `su -c 'pm install -r -d /data/local/tmp/app.apk'` |
 | Downgrade needed | add `-d` |
 | Test-only flag needed | add `-t` |
 
 Useful detail: keeping the same keystore across builds lets you iterate with `-r` and **preserve a logged-in session**, which matters a lot when the feature you are testing needs auth.
+
+### Vendor install interception (OEM shells)
+
+Some ROMs route `adb install` through their own "security centre", which can return
+a bare failure code while the APK itself is fine:
+
+```
+Performing Streamed Install
+adb.exe: failed to install app.apk: Failure [-99]
+```
+
+The device log shows the real actor and reason, and it is not your build:
+
+```
+ColorPackageInstallInterceptManager: OPPO_ADB_INSTALL_CANCEL ... packageName=<pkg>
+```
+
+**The root path bypasses the interception**, which is why the table above lists it:
+
+```bash
+adb -s <serial> push app.apk /data/local/tmp/app.apk
+adb -s <serial> shell "su -c 'pm install -r -g -d /data/local/tmp/app.apk'"
+```
+
+Recognise the shape: a numeric-only failure with no `INSTALL_FAILED_*` constant, an
+APK that installs fine through the device's own UI, and a device process (package
+installer / security centre) in the log. Attributing that to the patch is a
+classic wasted hour.
+
+### The installer may still own the screen afterwards
+
+After an intercepted or UI-driven install, a vendor **installer confirmation window
+can remain the foreground activity indefinitely** — sometimes showing a stale
+package name from an unrelated earlier attempt. Consequences:
+
+- `am start` on your app "does nothing", because another window owns the display.
+- Screenshots of your supposed launch actually show the installer.
+- `am start -W` can block past any reasonable timeout waiting for a first frame
+  that will never come.
+
+Clear it (`am force-stop <installer pkg>`, or a HOME key event) and re-launch. Before
+trusting any capture, check the foreground component:
+
+```bash
+adb -s <serial> shell "dumpsys activity activities | grep -m1 ResumedActivity"
+```
+
+If it is not your package, the frames are evidence about something else.
+`scripts/coldstart.py --expect-activity` performs this check automatically.
 
 ## Post-install / post-upgrade hazards
 

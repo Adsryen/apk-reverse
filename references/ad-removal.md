@@ -23,9 +23,27 @@ Do not assume "ads" is one thing. Enumerate first.
 - The plugin may also be bundled. Two copies still means one init gate; patch that, not the payload.
 
 **Server-driven ads / sponsored content** (the server returns the ad, the client renders it):
-- Look for endpoints like `/adverts`, `/adv`, `/banner`, `/config`, and DTOs named `Advertisement*`, `Advert*`, `Banner*`, `Promotion*`.
-- The client renders whatever the list contains. If the list is empty there is nothing to show, but see `pitfalls.md` P5 on **how not** to empty it.
-- Sponsored cards that look like content (a VPN promo, a network-accelerator card, a third-party product) are usually exactly this.
+- **This is the most common shape in a modern app, and it is usually the EASIEST to
+  remove — not the hardest.** Go to `server-config-and-updates.md` for the full
+  procedure. The short version: the client keeps a complete "do not show it" branch
+  so the operator can turn the slot off, so neutralising that one branch is a
+  small, local edit.
+- Look for endpoints like `/adverts`, `/adv`, `/banner`, `/config`, and DTOs named
+  `Advertisement*`, `Advert*`, `Banner*`, `Promotion*`, or — more common in practice
+  — a generic `*Config` payload carrying per-feature blocks (`splash`, `noticePopup`,
+  `updatePopup`, `tabbar`, `banner`).
+- The client renders whatever the list contains. If the list is empty there is nothing
+  to show, but see `pitfalls.md` P5 on **how not** to empty it: never make a shared
+  request fail.
+- Sponsored cards that look like content (a VPN promo, a network-accelerator card, a
+  third-party product) are usually exactly this.
+
+**A note on what "no SDK found" means.** If you have grepped the dex, enumerated the
+loaded classes at runtime, and counted the SDK log tags in a capture, and all three
+are zero (see Step 1), then there is no SDK, and continuing to search for one is a
+dead end rather than a thorough approach. Re-classify against this list instead. A
+zero result on all three signals is a strong positive finding about where the
+behaviour lives, and it should move you to the server-config path immediately.
 
 **Legit content that looks like an ad.** Verify before acting. A `/adverts?position=banner` response containing anime titles and poster images is the home-page carousel, not an advertisement. Removing it removes real functionality.
 
@@ -138,9 +156,22 @@ Frame the result at the right strength: *"the ad was hidden"* vs *"the ad subsys
 
 Be honest about residual ads rather than breaking the app to chase them:
 
-- **Server-driven content promos** deep in a feature's own data payload, where the screen's load depends on the same request. Suppressing them requires a data-consumption patch, not transport blocking.
-- **Ads delivered as content** (a sponsored "article" or a native card with no SDK marker) — indistinguishable from real content without runtime tracing.
-- **Ads whose SDK init also enables other features.** Removing init can break functionality that silently depended on it. Verify before shipping; a working app with one residual ad beats a broken app.
-- **Server-issued entitlements gated behind watching an ad.** The gate can be opened client-side, the entitlement cannot be created client-side.
+- **Content promos embedded deep in a feature's own data payload**, where the screen's
+  load depends on the same request. Distinguish this from a *dedicated config block*:
+  if the promo arrives in its own `splash` / `banner` / `popup` field with its own
+  `enabled` flag, it is removable (Step 1, server-driven). It is only genuinely hard
+  when the same list is both the content and the ad, with no marker separating them.
+- **Ads delivered as content** (a sponsored "article" or a native card with no SDK marker)
+  — indistinguishable from real content without runtime tracing.
+- **Ads whose SDK init also enables other features.** Removing init can break
+  functionality that silently depended on it. Verify before shipping; a working app with
+  one residual ad beats a broken app.
+- **Server-issued entitlements gated behind watching an ad.** The gate can be opened
+  client-side, the entitlement cannot be created client-side.
+- **A purely local brand launch screen.** If all you see is the app's own logo, no
+  third-party image and no network-sourced content, that is a splash screen, not an ad.
+  Removing it is a judgement call about the user's stated goal — say which one you
+  removed rather than silently treating "startup screen" as "ad".
 
-If a residual ad cannot be removed without breaking something, say so, and say exactly which coupling caused it. That is a better deliverable than a broken APK.
+If a residual ad cannot be removed without breaking something, say so, and say exactly
+which coupling caused it. That is a better deliverable than a broken APK.

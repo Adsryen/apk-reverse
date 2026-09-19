@@ -226,6 +226,97 @@ When you discover a window was contaminated, **the correct action is to discard 
 not to salvage it. A re-run costs minutes; a wrong conclusion costs the rest of the task, and it will
 be re-derived from the same bad evidence because the record says it was observed.
 
+### Captures you never looked at are not evidence
+
+This is a distinct failure from a contaminated window, and it survives every other guard here. The
+frames are real, the timestamps are honest, the hashes are right — and nobody looked at them.
+
+Two shapes it takes, both of which produce a confident wrong answer:
+
+- **You took the screenshots and moved on.** The images exist; the conclusion was drawn from logcat
+  or from the patch itself. A burst of uninspected frames reads in a report exactly like a burst of
+  inspected ones.
+- **You did look, but at the wrong thing.** Every frame shows a window that is not your app — a
+  vendor installer confirmation left over from an earlier install, a system dialog, the launcher —
+  and because the frames are consistent with each other, conviction grows. Consistency is not
+  corroboration when all the frames share the same blind spot.
+
+Guards:
+
+1. **Check what is on screen before trusting any capture.** One command settles it:
+   `dumpsys activity activities | grep -m1 ResumedActivity`. If the component is not your package,
+   the frames describe something else. Do this at the start of a capture sequence and again at the
+   end — the foreground can change mid-sequence.
+2. **Inspect immediately, not "later".** Look at the first frame, the middle one, and any frame at a
+   moment you care about (the second the splash would have shown, the moment a dialog would have
+   appeared). If you cannot describe in one sentence what a frame shows, you have not looked at it.
+3. **Treat identical consecutive frames as a signal.** Byte-identical frames mean the screen is
+   static. That is a finding — a hang, a dialog waiting for input, an activity that never changed —
+   not a capture artefact to be skipped over.
+4. **Name what you saw, per frame, in the record.** One line each. "f03 at 2.1 s: target main screen,
+   list populated" is evidence; "captured 12 frames" is a file listing.
+5. **A screenshot of a clean-looking screen is not proof that a dialog is absent** unless you captured
+   continuously across the moment it would have shown. Sampling is not observation: a modal that
+   appears and is then occluded can fall entirely between samples, and every frame you happened to
+   take shows something else.
+
+`scripts/coldstart.py` exists to make points 1 and 5 automatic: it takes a timed burst, prints the
+foreground component, and refuses to present the run as meaningful if the foreground is not your
+app. It still cannot look at the frames for you — that part is on you.
+
+## Long-context decay: the same mistake, twice
+
+A long task has a failure mode that has nothing to do with the target: **as the
+working context fills, settled conclusions lose their force.** Something that was
+established and verified two hours ago becomes, by the end, just another plausible
+belief — and the cheapest way to get from a stuck point to a feeling of progress is
+to re-try the thing that already failed.
+
+The symptoms, which are recognisable if you watch for them:
+
+- You are about to run a command whose result you already recorded earlier.
+- You are about to re-derive a fact (package name, an offset, a version, which
+  patch landed) that is in your own notes.
+- You are about to re-attempt an approach that failed — and the failure is not
+  obviously connected in your mind to this attempt.
+- A conclusion you are treating as solid was actually never verified, only
+  assumed early on and repeated since.
+- You are rewriting a summary of the task from memory rather than reading the
+  record.
+
+**The antidote is a record written for the second half of the task, not for a
+human at the end.** Keep it structured so a weakened-context read still gets the
+decision-relevant content:
+
+```markdown
+## Settled (verified — do not re-derive)
+- <fact>                      [how it was verified, one clause]
+## Refuted (do NOT retry — each cost time)
+- <approach> — fails because <mechanism>
+## Unverified assumptions currently in play
+- <assumption> — becomes a problem if <condition>
+## Next action, and how it will be judged
+- <one step> — success looks like <observable>
+```
+
+Three rules that make the difference:
+
+1. **Record the mechanism, not just the outcome.** "Traversal via that endpoint
+   broke the home screen because the child request shares the parent load" survives
+   context decay; "tried the endpoint thing, did not work" does not — and the
+   second version invites a third attempt.
+2. **Re-read the record at every checkpoint, and before starting any new
+   experiment.** Not at the end. The cost is seconds and it is the only thing
+   standing between you and a loop.
+3. **Two failures of the same shape means the model is wrong, not the
+   parameters.** Do not run a third variation. That is the same rule as the
+   two-strike rule in `SKILL.md`, and long-context decay is exactly what makes
+   people violate it.
+
+A useful asymmetry: **re-verifying is cheap, re-deciding is not.** Reading a value
+back out of the artifact takes a second and is fine. Re-running a whole experiment
+because you forgot its conclusion is what costs the round.
+
 ## Handover
 
 A handover is the record plus three things, written for someone with **no** memory of the task:

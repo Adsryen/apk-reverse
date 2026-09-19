@@ -81,6 +81,13 @@ def _order_ok(data, off, ob, nb):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
+        print(__doc__)
+        return 0
+    if len(sys.argv) < 5:
+        print('error: needs 4 arguments, got %d\n' % (len(sys.argv) - 1))
+        print(__doc__)
+        return 2
     src, dst, old, new = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
     ob, nb = old.encode('utf-8'), new.encode('utf-8')
     if len(ob) != len(nb):

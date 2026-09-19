@@ -28,7 +28,16 @@ import sys
 import threading
 import time
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+if len(sys.argv) > 1 and sys.argv[1] in ('-h', '--help'):
+    print(__doc__)
+    sys.exit(0)
+
+try:
+    PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+except ValueError:
+    print('error: listen_port must be a number, got %r\n' % sys.argv[1])
+    print(__doc__)
+    sys.exit(2)
 LOGF = sys.argv[2] if len(sys.argv) > 2 else None
 _lock = threading.Lock()
 _logf = open(LOGF, 'a', encoding='utf-8') if LOGF else None

@@ -86,6 +86,18 @@ SKILL.md                  a procedure with gates, not background reading:
                           what "done" means  ->  stop conditions  ->  constraints  ->  indexes
 references/               loaded on demand, one topic each
   recon.md                    identify packer, SDKs, code location, tamper checks; unpacking
+  server-config-and-updates.md
+                              the most common shape of "ad" and the one usually mis-diagnosed:
+                              the server supplies UI the client renders (launch screen, popup,
+                              announcement, tab set). The two-layer fetch that proves it, how to
+                              find the config DTOs by the field names data classes keep, why you
+                              patch the decision and not the data, deciding the scope of "remove",
+                              and remote re-enable / cached config durability
+  byte-level-patching.md      equal-length byte edits: why they beat method rebuilding (measured),
+                              locating an instruction's exact offset without scraping listings,
+                              the instruction width traps that desynchronise a decode, neutralise
+                              a branch vs redirect it, dex header integrity field order, and the
+                              verifier's move-result rule
   packers.md                  hardened targets: rejection signals, measuring the validation
                               boundary with single-variable tests, choosing a native host
   code-virtualization-and-custom-linkers.md
@@ -114,9 +126,11 @@ references/               loaded on demand, one topic each
                               simply does not work, and keeping the "blocks my analysis" question
                               separate from "blocks the deliverable"
   toolchain.md                what to install, how to invoke it non-interactively, which tools
-                              are GUI-only, version-alignment traps, working offline
+                              are GUI-only, version-alignment traps, working offline,
+                              **"not on PATH" is not "not installed"**, and which signer to use
   long-task-discipline.md     live record, conclusion grading, drift control, timeout and
-                              wait calibration, deliverable-form drift, handover
+                              wait calibration, deliverable-form drift, captures-you-never-looked-at,
+                              long-context decay, handover
   ad-removal.md               ad taxonomy, wrapper mapping, callback trap, global gates, verification
   updates-and-forced-upgrade.md  keeping a patched build alive: locating the version check, the
                               two-layer patch (no-op the routine, neutralise the comparison), what not
@@ -152,10 +166,26 @@ scripts/                  parameterized, path-agnostic
                               tools installed off-PATH or as runnable jars, and surfaces the
                               environment facts that poison experiments (clock skew, leftover
                               adb forward / proxy, a device-side frida process already running)
+  dexutil.py                  dependency-free dex reader: structural walk + exact instruction
+                              decode, dex header recompute/verify (correct checksum/signature
+                              order), branch-target and operand helpers. Library shared by the
+                              dex scripts, also runs standalone to dump one method with offsets
+  dex_find_insn.py            locate an instruction by decoded semantics and print its exact byte
+                              offset with context and both sides of any branch -- how you find a
+                              patch site instead of guessing offsets
+  dex_patch_bytes.py          equal-length byte patches from a JSON spec: semantic match, polarity
+                              pin via expect_next, equal-length enforcement, verifier check, dex
+                              header recompute, re-decode to prove it landed (--dry-run first)
+  dex_check_verifier.py       tier-3 check: does any conditional branch target a move-result
+                              (bypassing its producer)? Compares two builds and separates
+                              pre-existing findings from regressions your patch introduced
+  coldstart.py                cold-launch capture: timed screenshot burst + logcat signals +
+                              installed-build facts + launch timing, and warns when the foreground
+                              activity is not your app
   so_constpatch.py            same-length in-place rewrite of an isolated string constant, for
                               redirecting a library load instead of defeating a check
   smtool.py                   baksmali/smali wrapper with a configurable classpath
-  dexpatch/                   dexlib2 method-level surgical rewriter (preferred tool)
+  dexpatch/                   dexlib2 method-level rewriter (for changes that need new instructions)
   patch_smali.py              method-body replacement in a smali tree
   dex_strpatch.py             byte-level string patch with a string_ids ordering guard
   dex_classdiff.py            prove a dex edit was surgical
@@ -165,7 +195,8 @@ scripts/                  parameterized, path-agnostic
   dart_pprefs.py              build/query the object-pool -> code-site index for a Dart snapshot
   dart_disasm.py              annotated windowed disassembly of Dart AOT code + B/BL caller index
   find_refs.py                count callers of a method before patching it
-  repack.py                   rebuild APK, strip only signatures, sign, verify
+  repack.py                   rebuild APK, strip only signatures, keep META-INF/services/, write a
+                              4-byte-aligned archive (resources.arsc STORED+aligned), sign, verify
   devsh.py                    quoting-safe ADB shell helper
   usb_net_proxy.py            give an offline device network over USB
   datastore_inject.py         encode/inject AndroidX DataStore preferences safely
@@ -218,8 +249,8 @@ runnable `.jar` instead of a command), set `APKREV_TOOLS` to one or more directo
 will find them:
 
 ```
-set APKREV_TOOLS=D:\tools;D:\android\build-tools\35.0.0     # Windows
-export APKREV_TOOLS=/opt/tools:/opt/android/build-tools     # POSIX
+set APKREV_TOOLS=<dir>;<dir>                     # Windows, e.g. an SDK or project-local tools dir
+export APKREV_TOOLS=<dir>:<dir>                  # POSIX
 ```
 
 The scripts themselves are plain `python3` and are intended to work identically on Windows, macOS and
@@ -228,13 +259,18 @@ Linux; where a snippet is POSIX-only it is labelled. Nothing here assumes a Unix
 | Tool | Used for |
 |---|---|
 | Python 3.9+ | all scripts |
+| `ddc` (optional but recommended) | single-binary dex→Java decompiler with query subcommands (`info`, `findrefs`, `strings --with-locations`, per-class decompile). No JVM. Turns string cross-referencing from a crawl into a lookup, and reports package identity reliably — see `references/toolchain.md` |
 | `baksmali` / `smali` + `dexlib2` jars | disassembly, assembly, surgical patching |
-| JDK (`javac`, `java`) | building/running the dexlib2 patcher |
-| Android SDK build-tools (`aapt`, `zipalign`, `apksigner`) | manifest info, alignment, signing |
+| JDK (`javac`, `java`) | building/running the dexlib2 patcher; also provides `keytool`/`jarsigner` |
+| Android SDK build-tools (`aapt`, `zipalign`, `apksigner`) | manifest info, alignment, signing. **`apksigner` is the signer to use** — `jarsigner` rewrites the archive and breaks the alignment Android R+ requires |
 | `uber-apk-signer` (optional) | one-step align + sign |
 | ADB | device work |
 | Frida (host package + matching on-device server) | dynamic analysis |
 | a rooted device or emulator | anything beyond static analysis |
+
+None of these need to be on `PATH`: every script accepts an explicit path for the
+tools it shells out to, and `references/toolchain.md` covers finding an install that
+`PATH` does not know about (the common case for `apksigner` and `keytool`).
 
 ## Read this first
 

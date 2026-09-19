@@ -65,16 +65,22 @@ unread in this repository.
 | Deleting a library fixes validation but yields `UnsatisfiedLinkError: dlopen failed: library "X" not found` | `code-virtualization-and-custom-linkers.md` §the deadlock that eats hours |
 | Whole classes appear as bare `native` declarations with no body | `code-virtualization-and-custom-linkers.md` |
 | A library's **SONAME does not match its filename** | `code-virtualization-and-custom-linkers.md`, `native-and-so.md` |
-| Your edit had **no effect at all**, with no error | `packers.md` §map the validation boundary |
+| Your edit had **no effect at all**, with no error | `server-config-and-updates.md` §3 (the value may be server-sent), then `packers.md` §map the validation boundary |
 | Process **hangs** with no crash record, or dies to a `uid 0` killer | `native-tamper-and-suicide.md` §the rule (you probably made a terminate path *not return*) |
 | Death looks like an ordinary null dereference in a hardened library | `native-tamper-and-suicide.md` §deliberate-crash stubs |
 | The app dies **only while you are attached/rooted** | `detection-and-anti-analysis.md`; run the unmodified original under identical conditions first |
+| **Install fails with `[-124]` and mentions `resources.arsc` / alignment** | `repack-and-sign.md` §2a — STORED **and** 4-byte aligned, both required |
+| **Install fails with a bare numeric code (e.g. `[-99]`) and no `INSTALL_FAILED_*`** | `repack-and-sign.md` §vendor install interception — a device-side interceptor, not your build. Use the root `pm install` path |
+| **After an install, `am start` does nothing / screenshots show another app / `am start -W` hangs** | `repack-and-sign.md` §the installer may still own the screen |
+| Log shows `Failure to verify dex file ...: Bad checksum` and a startup `ClassNotFoundException` for an ordinary class | `byte-level-patching.md` §the dex header has two integrity fields — order matters |
 | An install "succeeded" but nothing changed, or the version did not move | `long-task-discipline.md` §keep the observation window clean |
 | Evidence contradicts itself, or a capture looks like two states mixed | `long-task-discipline.md` §keep the observation window clean |
-| A script will not start, or a tool "is missing" | `scripts/doctor.py`, then `toolchain.md` |
+| You took screenshots but drew the conclusion from logs or from the patch itself | `long-task-discipline.md` §captures you never looked at are not evidence |
+| You are about to re-run an experiment whose result you already recorded | `long-task-discipline.md` §long-context decay |
+| A script will not start, or a tool "is missing" | `scripts/doctor.py`, then `toolchain.md` §"not on PATH" is not "not installed" |
 | Feature-scoped network failure (login/register/pay) while the rest works | `tls-and-cert.md` — do not assume your patch caused it |
 | Everything works but **every signed request fails** after repack | `signature-derived-keys.md` |
-| Ads still appear after a patch that should have killed them | `ad-removal.md` §step 4 (count the SDK's own log lines; n -> 0, not "I did not see it") |
+| Ads still appear after a patch that should have killed them | `server-config-and-updates.md` §6 (cached config / remote re-enable), then `ad-removal.md` §step 4 (count the SDK's own log lines; n -> 0, not "I did not see it") |
 | A forced-update or "must update" gate blocks the build | `updates-and-forced-upgrade.md` §step 6 |
 | The dialog is gone but the feature is still locked | `membership-and-limits.md` / `account-gates.md` — decide server vs client authority before patching again |
 | You are about to discard a route as "blocked" | `packers.md` — re-read it before writing any route off; mis-attributed failures have removed viable routes for hours |
@@ -117,7 +123,7 @@ Answer these before touching a tool. Every one of them changes the whole plan.
    Read the manifest's `application android:name`. If it is a third-party shell class rather than the app's own Application, you have a packer and must handle it first.
 2. **Where does the behavior you want to change actually live?**
    - Ad SDK (Pangle/GDT/AnyThink/Kuaishou/Baidu/Sigmob…) → usually **client-side and removable** → `references/ad-removal.md`
-   - Server-issued ad config / sponsored cards → **client renders server data** → `references/ad-removal.md` §server-driven
+   - **Server-issued config for UI the client renders** (launch screen, popup, announcement, tab set, sponsored card on a home feed) → **the client decides, the server supplies the data** → `references/server-config-and-updates.md` (this is the most common shape of "ad" in a modern app, and there is no SDK to find — decide this question early, because hunting an SDK that does not exist costs hours)
    - Membership / VIP / paid content → **usually server-authorized, client patch is cosmetic** → `references/membership-and-limits.md` (read this *before* spending hours)
    - Feature flag, UI gate, debug switch → usually client-side
    - Anything decided by an API response → server-side → `references/server-api.md`
@@ -192,7 +198,18 @@ point; it exists for exactly this moment.
 2. **Extract strings and endpoints** — build a picture of the app's API surface and SDK inventory from the dex string tables. No decompiler needed for this, and it is fast. Scripts: `scripts/dex_strings.py`.
 3. **Trace to the owning class** — find the class that wraps the behavior (the app almost always wraps third-party SDKs in one helper). Reverse-lookup instructions: `references/dex-patching.md` §finding-the-call-site.
 4. **Decide the patch layer** — client SDK call / client rendering / client data consumption / server contract. See the table in `references/ad-removal.md`.
-5. **Patch surgically** — `references/dex-patching.md`. Prefer **dexlib2 method-level rewriting** over whole-tree smali round-trip. Whole-tree round-trip damages R8-optimized dex in ways that only show up at runtime.
+5. **Patch surgically** — `references/dex-patching.md` and `references/byte-level-patching.md`.
+   Two techniques, and picking the right one is a decision, not a preference:
+   **equal-length byte edits** (`scripts/dex_patch_bytes.py`, located with
+   `scripts/dex_find_insn.py`) when the change fits in an existing instruction slot
+   or constant — nothing moves, so no offset, try/catch block or debug pointer can
+   be invalidated. **dexlib2 method rewriting** (`scripts/dexpatch/`) only when the
+   change genuinely needs new instructions. Whole-tree smali round-trip damages
+   R8-optimized dex in ways that only show up at runtime; a method rebuild also
+   inflates the file (measured: `debug_info` 924 B -> 22.8 KB, dex 4.32 MB ->
+   7.73 MB on one sample). Whichever you use, recompute the dex header integrity
+   fields (**signature first, checksum last**) — `references/byte-level-patching.md`
+   §the dex header has two integrity fields.
 6. **Repack and sign** — `references/repack-and-sign.md`. **Do not strip the whole `META-INF/`.** This single mistake destroys otherwise-correct builds.
 6b. **Neutralise the update path — before you call the build done.** If the app checks for updates at all, add the two-layer patch (`references/updates-and-forced-upgrade.md`): no-op the update routine's entry, and force the version comparison to its "no update" side. A build that can be switched off or replaced remotely is not a deliverable, and this costs minutes here versus a rebuild later. Do the same for any **remote-config or hot-update** channel that could restore the behaviour you removed.
 6c. **Handle account gates only after classifying them** — if the request mentions sign-in or binding, apply `references/account-gates.md` and state plainly which guarded screens become usable and which stay empty because their content is account-scoped.
@@ -257,6 +274,8 @@ Load only what the current step needs.
 | File | Load when |
 |---|---|
 | `references/recon.md` | Starting any new sample; identifying packer, SDKs, code location, ABI |
+| `references/server-config-and-updates.md` | **The launch screen, a popup or the tab set is server-sent**; no ad SDK was found; a removed promo came back; anything controlled by a `*Config`/`*Popup` DTO with an `enabled` flag |
+| `references/byte-level-patching.md` | You want to change behaviour by editing a few bytes rather than rebuilding a method — equal-length patches, locating an instruction's exact offset, dex header integrity fields, branch polarity, verifier legality |
 | `references/packers.md` | The app is packed/hardened, or an edit makes it die before your code runs. Also load before discarding any route as "blocked by the shell" |
 | `references/code-virtualization-and-custom-linkers.md` | **No packer, dex is readable, and a re-signed build still dies** — whole classes turned into `native` declarations, a private loader with a mismatched SONAME, an embedded self-decrypting payload, or a Java-layer "signature killer" that logs success while a native check kills you. Covers the keep-it/drop-it deadlock and the string-redirect escape |
 | `references/framework-runtimes.md` | The UI is not native (Flutter / React Native / Unity / Cordova), or Java-layer hooks fire zero times while the UI clearly works |
@@ -264,7 +283,7 @@ Load only what the current step needs.
 | `references/native-and-so.md` | Patching in a `.so`, needing code to run before the app's own code, hand-built native payloads that crash inside the linker, or **deciding which library/ABI is actually loaded and executing** |
 | `references/native-tamper-and-suicide.md` | The process dies on its own (no Java stack, or a native crash that looks like a bug); you are about to neutralise a `kill`/`exit`/`abort` path; or a hardened library's sections/function boundaries look wrong |
 | `references/detection-and-anti-analysis.md` | The app fights back: it dies after you attach, refuses to run on your device, detects root/hook/debugger, or your dynamic tool simply does not work in this environment. **Read the first section before escalating** — the right answer is usually to switch to static, not to fight the detector |
-| `references/toolchain.md` | Choosing or invoking tools, something is not installed, a tool's output smells wrong, or you need to know which tools exist only as a GUI |
+| `references/toolchain.md` | Choosing or invoking tools, something is not installed (including "not on PATH but present on disk"), a tool's output smells wrong, or you need to know which tools exist only as a GUI |
 | `references/ad-removal.md` | Task involves ads, trackers, sponsored cards, splash/interstitial/reward |
 | `references/updates-and-forced-upgrade.md` | The patched build must **keep working over time**; the app has any version check, forced-upgrade dialog, self-update installer, or hot-update/resource channel. Load this for essentially every build you intend to ship. |
 | `references/account-gates.md` | Task mentions "no login required", "don't force sign-in", "skip phone binding", "guest mode"; or a screen/feature is unreachable signed-out. Also load before promising that an account-scoped screen will show anything |
@@ -280,7 +299,7 @@ Load only what the current step needs.
 | `references/verification.md` | Defining what "done" means; building the evidence chain |
 | `references/tls-and-cert.md` | One feature fails at runtime (login, registration, payment, an API-backed screen) while the rest of the app works |
 | `references/third-party-builds.md` | The input is a "cracked"/"modded" build you did not produce — audit it before trusting it |
-| `references/long-task-discipline.md` | The task will run long, or you are resuming one. Live record, conclusion grading, drift checkpoints, **deliverable-form drift (rooted-only vs shippable)**, bound-your-waits, handover |
+| `references/long-task-discipline.md` | The task will run long, or you are resuming one. Live record, conclusion grading, drift checkpoints, **deliverable-form drift (rooted-only vs shippable)**, bound-your-waits, **captures-you-never-looked-at**, **long-context decay**, handover |
 | `references/pitfalls.md` | Always worth a skim before building. This is the failure catalogue. |
 
 ## Script index
@@ -290,6 +309,11 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | Script | Purpose |
 |---|---|
 | `scripts/doctor.py` | **Run this first.** Capability report and per-script runnability: which tools exist (including ones installed off-PATH or as `java -jar` jars), which scripts can actually run here, and the environment facts that silently poison experiments — clock skew, leftover `adb forward`/proxy, a device-side frida process already running |
+| `scripts/dexutil.py` | **Dependency-free dex reader**: structural walk + exact instruction decode with a verified format table, `fix_dex_header`/`verify_dex_header` (correct checksum/signature order), branch-target and operand helpers. The library the dex scripts below share; also runs standalone to dump one method with offsets |
+| `scripts/dex_find_insn.py` | Locate an instruction by **decoded semantics** and get its exact byte offset, with context and both sides of any branch. This is how you find a patch site without guessing offsets or scraping listings |
+| `scripts/dex_patch_bytes.py` | Apply **equal-length byte patches** from a JSON spec: matches by semantics, pins branch polarity via `expect_next`, enforces equal length, checks verifier legality, recomputes the dex header in the correct order, and re-decodes to prove the edit landed. `--dry-run` first |
+| `scripts/dex_check_verifier.py` | Tier-3 check: does any **conditional branch target a `move-result*`** (bypassing its producer, so the class fails to load)? Compares two builds and distinguishes pre-existing findings from regressions your patch introduced |
+| `scripts/coldstart.py` | Cold-launch an app and capture a **timed screenshot burst + logcat signals + installed-build facts + launch timing**, and warn when the foreground activity is not your app (a vendor installer left on screen is the classic cause of "evidence" that shows something else) |
 | `scripts/smtool.py` | baksmali/smali wrapper with a bundled classpath (assemble/disassemble dex) |
 | `scripts/patch_smali.py` | Method-body replacement in a smali tree, matched by signature |
 | `scripts/dex_strpatch.py` | Byte-level string constant patch with **string_ids ordering guard** |
@@ -299,8 +323,8 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/dart_pool_strings.py` | Recover string literals from a Dart AOT snapshot: framed entries, the one-byte vs UTF-16 split, file offsets, and a run-length noise filter |
 | `scripts/dart_disasm.py` | Annotated windowed disassembly of Dart AOT code (pool + boolean annotations) plus a B/BL caller index |
 | `scripts/find_refs.py` | Count and list callers of a method/field (blast-radius check) |
-| `scripts/repack.py` | Rebuild APK with replaced dex, strip only signatures, sign |
-| `scripts/dexpatch/` | dexlib2 method-level surgical rewriter (the preferred patch tool) + build notes |
+| `scripts/repack.py` | Rebuild an APK with replaced dex, strip only signatures, keep `META-INF/services/`, **write a 4-byte-aligned archive** (`resources.arsc` STORED+aligned, which Android R+ refuses to install without), sign, and verify |
+| `scripts/dexpatch/` | dexlib2 method-level rewriter (for changes that genuinely need new instructions) + build notes |
 | `scripts/devsh.py` | Quoting-safe ADB shell helper for rooted devices |
 | `scripts/usb_net_proxy.py` | Give an offline device network over USB (adb reverse + local proxy) |
 | `scripts/datastore_inject.py` | Encode/inject AndroidX DataStore preferences (protobuf) safely |

@@ -30,11 +30,47 @@ cross-check with the program headers.
 | Tool | Invoke | Why this one |
 |---|---|---|
 | `baksmali` / `smali` (jars) | `java -cp <jars> org.jf.baksmali.Main d <dex> -o <dir>` | round-tripping, reading a method precisely |
-| `dexlib2` | small Java program | **the preferred patcher** — method-level rewrite, leaves everything else untouched (`dex-patching.md`) |
+| `dexlib2` | small Java program | method-level rewrite, leaves everything else untouched (`dex-patching.md`) |
+| **`ddc`** | `ddc app.apk -c <Class>` | **fastest read of dex as Java, plus query subcommands** — see below |
 | `apktool` | `java -jar apktool.jar d/b` | whole-app decode including resources |
 | `jadx` | `jadx --no-res -d <out> <apk>` | readable Java for orientation; **not** a source of truth (see below) |
 | `aapt2` | `aapt2 dump badging <apk>` | manifest facts, package name, versions |
 | `zipalign`, `apksigner` | from build-tools | alignment and signing |
+
+### ddc — dex-to-Java with query subcommands (worth adopting)
+
+A single-file Rust binary, no install, no JVM. Two things make it more useful than
+"a decompiler":
+
+```bash
+ddc info app.apk                     # label, package, version, launcher, sdk, per-dex counts
+ddc findrefs app.apk string "SomeToken"    # every reference site, class#method
+ddc strings app.apk -f "splash" --with-locations
+ddc app.apk -c com.example.Foo       # one class as Java
+ddc app.apk -o out/                  # full decompile, a few seconds for a normal APK
+```
+
+Measured on a 4.7 MB APK (4,070 classes / 30k methods): `info` ~0.13 s, `findrefs`
+~0.11 s, one class ~0.25 s, full decompile ~2.8 s producing ~4,000 files.
+
+Why the query subcommands matter more than the speed: **string cross-referencing
+becomes a lookup instead of a crawl.** Asking "which class mentions this config
+field name" is a sub-second command here and easily an hour of smali grepping by
+hand. That single property is what turns "find the convergence point" from
+exploration into a query.
+
+`info` also **prevents a specific, costly mistake**: reading the package identity
+out of the binary manifest by hand. Hand-extracted AXML strings are ambiguous —
+class-name fragments look exactly like package names, and picking the wrong one
+sends every later `pm`/`dumpsys`/data-dir query to a package that does not exist.
+Let the tool report `package`, `label` and `launcher`, and cross-check with
+`aapt2 dump badging` when available.
+
+Limits to plan around: types are erased (no generics); R8 short names stay short,
+so you still need string cross-references to infer meaning; output is a **reading
+aid, not compilable source** (occasional declaration/use ordering is inverted, and
+numeric resource ids appear as decimal integers); very large methods produce
+thousands of lines and are better approached via `findrefs`/`getmethod` first.
 
 **Classpath gotcha.** `baksmali`/`smali` need their dependency jars on the classpath together
 (`smali`, `antlr-runtime`, `stringtemplate`, `baksmali`, `dexlib2`, `util`, `jcommander`, `guava`).
@@ -100,6 +136,66 @@ script, and check the device architecture — the server binary is per-ABI.
 **A version mismatch here wastes the most time of any tool in this file.** A Dart decompiler built
 for a different engine version produces output that is subtly wrong rather than obviously broken.
 Pin the version first (`dart-aot.md` §1) and do not "try it and see".
+
+## "Not on PATH" is not "not installed"
+
+`doctor.py` and `preflight.py` report whether each tool resolves on `PATH`. That
+is a statement about `PATH`, not about the machine, and the difference has cost
+real time: a full custom zip writer was built to work around a missing
+`apksigner` that was already installed in an SDK directory nothing had added to
+`PATH`.
+
+**Before treating a tool as absent, search the filesystem once:**
+
+```bash
+# POSIX
+find / -name apksigner -o -name zipalign -o -name baksmali.jar 2>/dev/null | head
+
+# Windows (PowerShell) -- list every drive letter first, then search each
+(Get-PSDrive -PSProvider FileSystem).Root |
+  ForEach-Object { Get-ChildItem -Path $_ -Recurse -Depth 5 -ErrorAction SilentlyContinue `
+      -Include apksigner.bat,zipalign.exe,keytool.exe }
+```
+
+Common places that are *not* on `PATH`:
+
+| Artefact | Typical location |
+|---|---|
+| `apksigner`, `zipalign`, `aapt2` | any `build-tools/<ver>/` under an Android SDK, and portable tool bundles |
+| `apksigner.jar` | inside those same directories (runnable as `java -jar`) |
+| `keytool`, `jarsigner`, `javac` | a JDK install whose `bin` was never added to `PATH`; `java -XshowSettings:properties -version 2>&1 \| grep java.home` reveals the JDK root even when `keytool` does not resolve |
+| `uber-apk-signer.jar`, `baksmali*.jar` | bundled with portable APK toolkits |
+
+Record the resolved absolute paths once, in your running notes, and pass them to
+the scripts that accept `--apksigner` / `--zipalign` / `--ks` style flags. Every
+script in this repository takes an explicit path for this reason.
+
+**A useful asymmetry:** missing `apksigner` is survivable (a v2-only signature
+block can be appended without reordering the archive), but missing `zipalign` is
+not a reason to hand-roll alignment either -- write the archive aligned in the
+first place, as `scripts/repack.py` does. Prefer producing a correct archive over
+repairing one afterwards: post-hoc alignment tools rewrite the file, which
+changes every offset and can break a target that fingerprints its own layout.
+
+## Signing: pick the signer deliberately
+
+Two signers, and the choice changes the output bytes:
+
+- **`apksigner`** (build-tools) appends the v2/v3 signature block after the zip
+  content. It does **not** reorder entries, so a carefully aligned archive stays
+  aligned. This is the default choice.
+- **`jarsigner`** (JDK) rewrites the archive as a side effect of adding the v1 JAR
+  signature, which recompresses entries and **destroys the alignment** that
+  Android R+ requires. A build signed this way can fail to install with
+  `Failure [-124] ... resources.arsc ... aligned on a 4-byte boundary` even though
+  the same archive installed fine moments earlier, and `jarsigner -verify` reports
+  success. If you have run `jarsigner` on an archive and a previously-working
+  install starts failing, re-pack and sign with `apksigner` before investigating
+  anything else.
+
+Enable **v1 + v2 + v3**. v1 keeps very old devices working; v2/v3 are what modern
+platforms actually verify, and v1-only builds are rejected in more configurations
+than people expect.
 
 ## The general trap: a tool's failure is not a finding about the target
 
