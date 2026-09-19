@@ -388,6 +388,13 @@ When names are meaningless (`a7`, `x6`, `uf0`), do not patch from names. Instead
 
 Signs: the app exits or freezes shortly after attach; `logcat` shows a generic process death with no Java stack; strings like `frida`, `xposed`, `magisk`, `substrate` are referenced by **app code** (not just by an SDK's string list).
 
+**Rule this out first — it is not always a detector.** A process that dies right after you
+attach is frequently the ROM rather than the app: on aggressive OEM ROMs, merely backgrounding
+the app (pressing HOME, switching away) triggers a freeze, and the logcat signature is a state
+transition such as `state: R -> F` while hooks stop with no Java stack. That looks identical to
+a detector killing you. Check `references/environment.md` for that signature, and keep the app
+in the foreground, before building an anti-anti plan.
+
 Countermeasures, in order of least disruption:
 1. Spawn + late resume, so hooks are installed before the check runs.
 2. Rename `frida-server` and move it out of obvious paths.
