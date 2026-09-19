@@ -66,6 +66,17 @@ Answer these before touching a tool. Every one of them changes the whole plan.
     mechanism actually fires** (the signal and the tombstone split them apart), and **neutralise by
     returning, never by making it not return** — a spinning stub freezes the process and produces a
     symptom that looks nothing like the cause.
+12. **Will this build still be usable in a week?** → `references/updates-and-forced-upgrade.md`
+    If the app has any version check, upgrade prompt, or self-update path, an unpatched build can be
+    turned off remotely or replaced by the official package. This is one or two edits and it decides
+    whether the work is durable — do it as part of the build, not as a follow-up. Also check for a
+    **hot-update / remote-config** channel, which can restore behaviour you removed without any version
+    change at all.
+13. **Does the request touch sign-in or phone binding — "no login required", "skip binding", "guest ok"?**
+    → `references/account-gates.md`. The whole difficulty here is separating a **client-side gate**
+    (patchable) from an **account-scoped resource** (the screen is empty because the server has no
+    account to answer for — not patchable). Classify first; and never fabricate a session to satisfy a
+    gate, which produces a state worse than being signed out.
 
 ## The workflow, end to end
 
@@ -76,6 +87,8 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 4. **Decide the patch layer** — client SDK call / client rendering / client data consumption / server contract. See the table in `references/ad-removal.md`.
 5. **Patch surgically** — `references/dex-patching.md`. Prefer **dexlib2 method-level rewriting** over whole-tree smali round-trip. Whole-tree round-trip damages R8-optimized dex in ways that only show up at runtime.
 6. **Repack and sign** — `references/repack-and-sign.md`. **Do not strip the whole `META-INF/`.** This single mistake destroys otherwise-correct builds.
+6b. **Neutralise the update path — before you call the build done.** If the app checks for updates at all, add the two-layer patch (`references/updates-and-forced-upgrade.md`): no-op the update routine's entry, and force the version comparison to its "no update" side. A build that can be switched off or replaced remotely is not a deliverable, and this costs minutes here versus a rebuild later. Do the same for any **remote-config or hot-update** channel that could restore the behaviour you removed.
+6c. **Handle account gates only after classifying them** — if the request mentions sign-in or binding, apply `references/account-gates.md` and state plainly which guarded screens become usable and which stay empty because their content is account-scoped.
 7. **Verify on device** — `references/environment.md` + `references/verification.md`. Check: launches, the changed behavior actually changed, nothing unrelated broke, and **the app reaches its normal UI with no blocking dialog**. First prove the artifact actually changed on the device -- a package manager reporting success does not prove an interposed confirmation was accepted (P18). Capture continuously for the first ~20 seconds after launch, **and look at the captures** — sampling gaps are how a blocking modal goes unseen (P20), and a burst of images that were never inspected is not evidence. If the accessibility tree is empty, the image is the primary evidence rather than a fallback.
 8. **Log what you learned** — if a failure cost you more than thirty minutes, add it to `references/pitfalls.md`. That file is the most valuable artifact in this skill.
 
@@ -109,6 +122,8 @@ Load only what the current step needs.
 | `references/native-tamper-and-suicide.md` | The process dies on its own (no Java stack, or a native crash that looks like a bug); you are about to neutralise a `kill`/`exit`/`abort` path; or a hardened library's sections/function boundaries look wrong |
 | `references/toolchain.md` | Choosing or invoking tools, something is not installed, a tool's output smells wrong, or you need to know which tools exist only as a GUI |
 | `references/ad-removal.md` | Task involves ads, trackers, sponsored cards, splash/interstitial/reward |
+| `references/updates-and-forced-upgrade.md` | The patched build must **keep working over time**; the app has any version check, forced-upgrade dialog, self-update installer, or hot-update/resource channel. Load this for essentially every build you intend to ship. |
+| `references/account-gates.md` | Task mentions "no login required", "don't force sign-in", "skip phone binding", "guest mode"; or a screen/feature is unreachable signed-out. Also load before promising that an account-scoped screen will show anything |
 | `references/membership-and-limits.md` | Task involves VIP, subscription, paid content, unlock, "fully cracked" |
 | `references/server-api.md` | The behavior is decided by a response, or you need to know if a patch can even matter |
 | `references/dex-patching.md` | Any actual editing of dex/smali, choosing a patch layer, choosing a tool |

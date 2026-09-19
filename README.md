@@ -35,6 +35,12 @@ directly.
   fix works or freezes the whole app in a way that looks nothing like the cause.
 - Knowing **which tools to reach for and where each one lies** — including the ones that only
   exist as a GUI, so you ask for a human instead of silently substituting a weaker method.
+- Making a patched build **stay** patched: neutralising version checks, forced-upgrade dialogs and
+  self-update installers so the work cannot be switched off remotely — and recognising the
+  hot-update/remote-config channel that can quietly undo it without any version change.
+- Separating a **client-side sign-in gate** (patchable) from an **account-scoped resource** (empty
+  because the server has nothing to answer with), and knowing that forging a session produces a state
+  worse than being signed out.
 - Keeping a **long task honest**: a live record, graded conclusions, calibrated timeouts, and
   bounded waits, so progress is not lost and the same mistake is not made twice.
 - Avoiding the specific mistakes that produce an APK that builds perfectly and dies at
@@ -65,6 +71,15 @@ references/               loaded on demand, one topic each
   long-task-discipline.md     live record, conclusion grading, drift control, timeout and
                               wait calibration, deliverable-form drift, handover
   ad-removal.md               ad taxonomy, wrapper mapping, callback trap, global gates, verification
+  updates-and-forced-upgrade.md  keeping a patched build alive: locating the version check, the
+                              two-layer patch (no-op the routine, neutralise the comparison), what not
+                              to touch (manifest version, installer permission, host blocking),
+                              self-update and hot-update/remote-config channels, verifying that no
+                              version request is issued at all
+  account-gates.md            sign-in walls, forced phone binding, guest mode: telling a client-side
+                              gate (patchable) apart from an account-scoped resource (not), why
+                              fabricating a session is worse than staying signed out, and the
+                              unavoidable session loss after a reinstall
   signature-derived-keys.md   when the app's own signing certificate is used as key material:
                               detection greps, why offline extraction is unreliable, the
                               hardcode-then-verify procedure

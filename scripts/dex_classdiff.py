@@ -9,11 +9,12 @@ IncompatibleClassChangeError ("Found interface X, but class was expected") at ru
 
 Important limitation: this check compares tables only. It cannot see code-item damage —
 see references/patch-audit.md for the checks that can.
-
-Usage: python dex_classdiff.py <a.dex> <b.dex> [filter-substring]
 """
+import argparse
 import struct
 import sys
+
+ACC_INTERFACE = 0x200
 
 
 def uleb128(data, off):
@@ -30,26 +31,22 @@ def uleb128(data, off):
 
 
 def read_strings(data):
-    off = struct.unpack('<I', data[0x3C:0x40])[0]
-    size = struct.unpack('<I', data[0x38:0x40][:4])[0]
-    size = struct.unpack('<I', data[0x38:0x3C])[0]
+    strings_size = struct.unpack('<I', data[0x38:0x3C])[0]
+    strings_off = struct.unpack('<I', data[0x3C:0x40])[0]
     out = []
-    for i in range(size):
-        sdata_off = struct.unpack('<I', data[off + i * 4: off + i * 4 + 4])[0]
+    for i in range(strings_size):
+        sdata_off = struct.unpack('<I', data[strings_off + i * 4: strings_off + i * 4 + 4])[0]
         n, p = uleb128(data, sdata_off)
         raw = data[p:p + n]
-        try:
-            out.append(raw.decode('utf-8', 'replace'))
-        except Exception:
-            out.append('')
+        out.append(raw.decode('utf-8', 'replace'))
     return out
 
 
 def class_map(path):
     data = open(path, 'rb').read()
     strings = read_strings(data)
-    type_ids_off = struct.unpack('<I', data[0x44:0x48])[0]
     n_types = struct.unpack('<I', data[0x40:0x44])[0]
+    type_ids_off = struct.unpack('<I', data[0x44:0x48])[0]
     types = []
     for i in range(n_types):
         idx = struct.unpack('<I', data[type_ids_off + i * 4: type_ids_off + i * 4 + 4])[0]
@@ -66,41 +63,68 @@ def class_map(path):
 
 
 def main():
-    a, b = sys.argv[1], sys.argv[2]
-    filt = sys.argv[3] if len(sys.argv) > 3 else None
-    A = class_map(a)
-    B = class_map(b)
-    print('A classes=%d  B classes=%d' % (len(A), len(B)))
+    ap = argparse.ArgumentParser(
+        description='Compare two dex files at class_defs level (names + access_flags). '
+                    'Proves a reassembly did not damage interface/class relationships.')
+    ap.add_argument('a', help='first dex (e.g. the original)')
+    ap.add_argument('b', help='second dex (e.g. the rebuilt one)')
+    ap.add_argument('filter', nargs='?', default=None,
+                    help='only report names containing this substring')
+    ap.add_argument('--max-list', type=int, default=10,
+                    help='how many A-only / B-only names to print (default 10)')
+    ap.add_argument('--max-flags', type=int, default=25,
+                    help='how many access_flags differences to print (default 25)')
+    ap.add_argument('--quiet', action='store_true',
+                    help='print only the summary counts')
+    args = ap.parse_args()
+
+    A = class_map(args.a)
+    B = class_map(args.b)
     only_a = sorted(set(A) - set(B))
     only_b = sorted(set(B) - set(A))
-    print('only_in_A=%d  only_in_B=%d' % (len(only_a), len(only_b)))
-    for n in only_a[:10]:
-        print('  A-only:', n)
-    for n in only_b[:10]:
-        print('  B-only:', n)
 
     diff_iface = []
     diff_flags = []
     for name in sorted(set(A) & set(B)):
         fa, fb = A[name], B[name]
-        ia, ib = bool(fa & 0x200), bool(fb & 0x200)
-        if ia != ib:
-            diff_iface.append((name, hex(fa), hex(fb)))
+        if bool(fa & ACC_INTERFACE) != bool(fb & ACC_INTERFACE):
+            diff_iface.append((name, fa, fb))
         elif fa != fb:
-            diff_flags.append((name, hex(fa), hex(fb)))
+            diff_flags.append((name, fa, fb))
+
+    print('A classes=%d  B classes=%d' % (len(A), len(B)))
+    print('only_in_A=%d  only_in_B=%d' % (len(only_a), len(only_b)))
+    if not args.quiet:
+        for n in only_a[:args.max_list]:
+            print('  A-only:', n)
+        for n in only_b[:args.max_list]:
+            print('  B-only:', n)
 
     print('\n*** ACC_INTERFACE mismatch: %d ***' % len(diff_iface))
-    for name, fa, fb in (diff_iface if not filt else [x for x in diff_iface if filt in x[0]]):
-        print('  %-70s A=%s B=%s' % (name, fa, fb))
+    if not args.quiet:
+        for name, fa, fb in diff_iface:
+            if args.filter and args.filter not in name:
+                continue
+            print('  %-70s A=%s B=%s' % (name, hex(fa), hex(fb)))
+
     print('\naccess_flags diff (same interface-ness): %d' % len(diff_flags))
-    shown = 0
-    for name, fa, fb in diff_flags:
-        if filt and filt not in name:
-            continue
-        if shown < 25:
-            print('  %-70s A=%s B=%s' % (name, fa, fb))
+    if not args.quiet:
+        shown = 0
+        for name, fa, fb in diff_flags:
+            if args.filter and args.filter not in name:
+                continue
+            if shown >= args.max_flags:
+                print('  ... (%d more suppressed)' % (len(diff_flags) - shown))
+                break
+            print('  %-70s A=%s B=%s' % (name, hex(fa), hex(fb)))
             shown += 1
+
+    # Exit non-zero when a structural difference exists, so a caller can gate on it.
+    verdict = (len(only_a) == 0 and len(only_b) == 0 and len(diff_iface) == 0)
+    print('\nverdict: %s' % ('class tables identical'
+                             if verdict else 'STRUCTURAL DIFFERENCE — inspect above'))
+    return 0 if verdict else 1
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
