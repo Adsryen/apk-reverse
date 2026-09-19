@@ -28,6 +28,26 @@ Recompressing them produces builds that fail to install or misbehave.
 
 **4. Changing any dex changes nothing about resources.** If you only edited dex, do not touch `res/`, `assets/`, or `lib/`.
 
+**4a. A full `apktool b` rebuild rewrites resource paths even when you edited none.** Decoding with
+`apktool d` (without `-s`) and rebuilding re-encodes resources, and obfuscated short names are
+expanded back to readable ones — an entry originally shipped as `res/-B.png` comes back as
+`res/drawable-hdpi/<real-name>.png`. Expect an entry-level diff against the original to show on the
+order of a thousand "removed + added" pairs that are **pure renames**, not content changes.
+
+This is expected and usually harmless, but two consequences matter:
+
+- **Never read that diff as "I broke something".** Compare by identity (rename-aware, or by content
+  hash grouped by size) before drawing a conclusion. A toy diff that reports 1100 changes when you
+  edited one method is a **tool** artifact and will send you hunting a bug that does not exist.
+- **It changes the byte layout of the whole archive.** On a target that fingerprints its own file
+  against a stored hash, or whose protection binds offsets into a container, a full rebuild is a much
+  larger change surface than a dex-only swap. If your only edit is dex, prefer replacing the
+  `classes*.dex` entries inside the original zip (`compress_type` preserved) over a full rebuild.
+  Keep that dex-only path as a fallback for exactly this reason.
+
+If you must avoid resource churn entirely, decode with `-s` (do not decode resources) and only
+rebuild what you changed.
+
 **5. Signing creates new `MANIFEST.MF`/`*.SF`/`*.RSA`.** That is expected — the check is that **no signature artifact from the ORIGINAL** survives, and **no non-signature entry was lost**.
 
 ## Repacking an unpacked (de-shelled) app

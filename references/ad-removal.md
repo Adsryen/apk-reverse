@@ -120,6 +120,7 @@ Logcat silence alone is weak evidence. A credible "ads are gone" claim needs all
 
 1. **UI, screen by screen** — splash, home banner, detail page, reader/player, reward button, unlock prompt. Capture before/after screenshots (`verification.md` §screenshot discipline).
 2. **Logs** — the SDK's characteristic tags are **entirely absent**, not merely quiet: `anythink`, `ATSDK`, `Pangle`, `TTAd`, `GDT`, `ksad`, and so on.
+   Make this a **count, not an impression**. Aggregators log a recognisable burst while they probe which networks are wired in (a "SDK id N not integrated" style line, once per network). Capture the same fixed window on the original and on your build and compare numbers: `8 -> 0` is a measurement; "I did not see it" is not. A tag that goes quiet without reaching zero usually means the SDK still starts and simply failed to load an ad this run — a different, weaker result than "the subsystem never started".
 3. **Filesystem, the strongest signal** — the app's private directory contains **no ad SDK working directory at all**:
    ```bash
    adb shell "su -c 'ls -la /data/data/<app.package>/files/'"

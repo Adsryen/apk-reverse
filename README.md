@@ -54,6 +54,14 @@ references/               loaded on demand, one topic each
   recon.md                    identify packer, SDKs, code location, tamper checks; unpacking
   packers.md                  hardened targets: rejection signals, measuring the validation
                               boundary with single-variable tests, choosing a native host
+  code-virtualization-and-custom-linkers.md
+                              the layer between "packed" and "clean": whole classes turned into
+                              `native` declarations, a private loader whose SONAME does not match
+                              its filename, an embedded self-decrypting payload, a Java-layer
+                              "signature killer" that logs success while a native check kills you.
+                              The keep-it/drop-it deadlock, how to separate the *checker* from the
+                              *implementation*, and the string-redirect technique that ends it
+                              without neutralizing anything
   framework-runtimes.md       Flutter / React Native / Unity: which layer owns the UI, and how to
                               find logic when there are no symbols (string encoding traps)
   dart-aot.md                 Dart AOT in depth: version pinning and building a matching decompiler,
@@ -106,6 +114,12 @@ references/               loaded on demand, one topic each
   verification.md             the claim ladder; what "done" means
   pitfalls.md                 the failure catalogue -- read before building
 scripts/                  parameterized, path-agnostic
+  doctor.py                   run this first: capability report + per-script runnability, finds
+                              tools installed off-PATH or as runnable jars, and surfaces the
+                              environment facts that poison experiments (clock skew, leftover
+                              adb forward / proxy, a device-side frida process already running)
+  so_constpatch.py            same-length in-place rewrite of an isolated string constant, for
+                              redirecting a library load instead of defeating a check
   smtool.py                   baksmali/smali wrapper with a configurable classpath
   dexpatch/                   dexlib2 method-level surgical rewriter (preferred tool)
   patch_smali.py              method-body replacement in a smali tree
@@ -161,7 +175,21 @@ The agent loads `SKILL.md` when a task matches its description, and pulls in
 
 ## Requirements
 
-Nothing is mandatory; each script checks what it needs.
+Nothing is mandatory; each script checks what it needs. `scripts/doctor.py` reports which of these
+are present here, which scripts can therefore run, and — usefully — which tools exist somewhere other
+than PATH.
+
+If your toolchain lives outside PATH (a project-local `tools/` directory, a versioned SDK folder, a
+runnable `.jar` instead of a command), set `APKREV_TOOLS` to one or more directories and `doctor.py`
+will find them:
+
+```
+set APKREV_TOOLS=D:\tools;D:\android\build-tools\35.0.0     # Windows
+export APKREV_TOOLS=/opt/tools:/opt/android/build-tools     # POSIX
+```
+
+The scripts themselves are plain `python3` and are intended to work identically on Windows, macOS and
+Linux; where a snippet is POSIX-only it is labelled. Nothing here assumes a Unix shell.
 
 | Tool | Used for |
 |---|---|

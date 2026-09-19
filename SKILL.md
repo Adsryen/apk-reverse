@@ -13,7 +13,7 @@ Three rules override everything else in this skill:
 2. **Never ship an unverified APK.** "It assembles" is not "it works". Install it, launch it, exercise the feature you changed, on a real device or a close emulator.
 3. **Know which layer owns the behavior before you patch.** Ads, paywalls, and feature gates live in different places. Patching the wrong layer either does nothing or breaks the app. Classify first (see step 2 below), patch second.
 
-## Start here: classify the target in ten questions
+## Start here: classify the target in thirteen questions
 
 Answer these before touching a tool. Every one of them changes the whole plan.
 
@@ -80,7 +80,8 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 
 ## The workflow, end to end
 
-1. **Preflight, then Recon** — `scripts/preflight.py` before anything else if a device is involved (it takes seconds and prevents a whole class of false conclusions), then `references/recon.md`. Manifest, package name, version, ABI, dex count, packer, embedded SDKs, where the app's own code lives. Ten minutes here saves hours. **If it is packed, unpack before anything else** (`references/recon.md` §unpacking): you cannot patch code you cannot read, the encrypted payload lengths tell you which dumped dex is the original, and a memory dump must be de-duplicated by hash and structurally validated before any of it is trusted.
+1. **Preflight, then Recon** — `scripts/doctor.py` is the cheapest possible first command: it reports which toolchains and scripts can actually run here, and surfaces the environment facts that poison experiments (clock skew, leftover `adb forward`/proxy, a device-side frida process already running, a tool installed off-PATH). Then `scripts/preflight.py` before anything else if a device is involved (it takes seconds and prevents a whole class of false conclusions), then `references/recon.md`. Manifest, package name, version, ABI, dex count, packer, embedded SDKs, where the app's own code lives. Ten minutes here saves hours. **If it is packed, unpack before anything else** (`references/recon.md` §unpacking): you cannot patch code you cannot read, the encrypted payload lengths tell you which dumped dex is the original, and a memory dump must be de-duplicated by hash and structurally validated before any of it is trusted.
+   **If recon says there is no packer but a re-signed build still dies**, you are in the layer `references/code-virtualization-and-custom-linkers.md` covers — do not proceed on the assumption that "no packer" means "editable".
    **If the app already dies on its own** — especially at a roughly constant time after launch, or with a native crash — locate the mechanism *before* planning any patch (`references/native-tamper-and-suicide.md`, `scripts/native_crash.py`). Record the observed time-to-death: it is the baseline every later attempt is measured against, and without it a surviving run cannot be told from a changed schedule.
 2. **Extract strings and endpoints** — build a picture of the app's API surface and SDK inventory from the dex string tables. No decompiler needed for this, and it is fast. Scripts: `scripts/dex_strings.py`.
 3. **Trace to the owning class** — find the class that wraps the behavior (the app almost always wraps third-party SDKs in one helper). Reverse-lookup instructions: `references/dex-patching.md` §finding-the-call-site.
@@ -116,6 +117,7 @@ Load only what the current step needs.
 |---|---|
 | `references/recon.md` | Starting any new sample; identifying packer, SDKs, code location, ABI |
 | `references/packers.md` | The app is packed/hardened, or an edit makes it die before your code runs. Also load before discarding any route as "blocked by the shell" |
+| `references/code-virtualization-and-custom-linkers.md` | **No packer, dex is readable, and a re-signed build still dies** — whole classes turned into `native` declarations, a private loader with a mismatched SONAME, an embedded self-decrypting payload, or a Java-layer "signature killer" that logs success while a native check kills you. Covers the keep-it/drop-it deadlock and the string-redirect escape |
 | `references/framework-runtimes.md` | The UI is not native (Flutter / React Native / Unity / Cordova), or Java-layer hooks fire zero times while the UI clearly works |
 | `references/dart-aot.md` | The logic lives in a Dart AOT snapshot (`libapp.so`): pinning the Dart version, building a matching decompiler, the object pool and reference indexing, register/boolean conventions, locating and patching Dart code |
 | `references/native-and-so.md` | Patching in a `.so`, needing code to run before the app's own code, hand-built native payloads that crash inside the linker, or **deciding which library/ABI is actually loaded and executing** |
@@ -146,6 +148,7 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 
 | Script | Purpose |
 |---|---|
+| `scripts/doctor.py` | **Run this first.** Capability report and per-script runnability: which tools exist (including ones installed off-PATH or as `java -jar` jars), which scripts can actually run here, and the environment facts that silently poison experiments — clock skew, leftover `adb forward`/proxy, a device-side frida process already running |
 | `scripts/smtool.py` | baksmali/smali wrapper with a bundled classpath (assemble/disassemble dex) |
 | `scripts/patch_smali.py` | Method-body replacement in a smali tree, matched by signature |
 | `scripts/dex_strpatch.py` | Byte-level string constant patch with **string_ids ordering guard** |
@@ -168,6 +171,7 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/preflight.py` | Read-only environment check before every experiment block: device, root, ABI/translation, clock skew, leftover proxy/forwards, dead device server. Run this before blaming a patch. |
 | `scripts/lib_map.py` | What is **actually mapped** into a live process: per-library path, base, architecture (`ELF e_machine`), and classification (system / from-APK / runtime-materialized). Answers "which library and which ABI is really executing". |
 | `scripts/elf_plt.py` | Resolve a PLT stub to its imported symbol on x86_64 and aarch64 (from the **relocation table**, not from position or a comment), list a symbol's callers, and **byte-diff two libraries naming the symbol each changed stub belongs to**. Run this before patching any stub, and to audit a patch set you inherited. |
+| `scripts/so_constpatch.py` | Same-length in-place rewrite of an isolated string constant, for **redirecting a library load instead of defeating a check** (`System.loadLibrary("checker")` -> a library that is already mapped). Enforces equal length, refuses to touch a substring of a longer identifier, reports whether each hit sits in a constant pool, and patches inside an APK or a bare `.so`. See `references/code-virtualization-and-custom-linkers.md`. |
 | `scripts/apk_diff.py` | Entry-level diff of two APKs: what changed, what was **added** (injection candidates), what was removed — by content hash, so same-size replacements are caught. Use it to audit a third-party build and to prove your own build was surgical. |
 | `scripts/native_crash.py` | Locate a native death from a logcat capture or tombstone: signal, fault address, register state, backtrace split into your libraries vs system, the faulting instruction — plus an explicit flag when the fault looks **arranged** rather than accidental. |
 | `scripts/grab_crash.py` | Recover a stack that a crash-reporter SDK swallowed, when the log shows the app died but prints no backtrace of its own. |

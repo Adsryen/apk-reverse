@@ -4,6 +4,12 @@ Load this when recon says the app's `Application` class is not the app's own, or
 app die before your code ever runs. Packing is the single most common reason a correct patch appears to
 "do nothing", so treat it as its own phase with its own evidence standard.
 
+**Not packed, and still dying?** That is a different layer and a different file:
+`code-virtualization-and-custom-linkers.md`. There `Application` is the app's own, the dex is fully
+readable, and yet whole classes are `native` declarations and a private loader carries an embedded
+validation payload. The single most expensive recon error in this domain is reading "no packer" as
+"the code is editable" — check for that shape explicitly before planning an edit.
+
 ## What a packer actually does
 
 A shell (jiagu / weapon / leggu / 360 / ijiami / bangcle class) replaces the manifest's

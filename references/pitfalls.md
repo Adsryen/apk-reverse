@@ -18,15 +18,20 @@ App dies immediately on launch. Sometimes a different `ClassNotFoundException` f
 **Root cause**
 `META-INF/` is not only signatures. It holds **ServiceLoader registrations** that Android reads at runtime. Deleting the directory to prepare for re-signing deletes them too.
 
-Real examples found in one APK:
+Real examples found in one APK (framework entries first — these are the ones that produce the
+confusing `ClassNotFoundException`; note that **third-party libraries register the same way**, so the
+list is not limited to well-known frameworks):
 ```
 META-INF/services/kotlinx.coroutines.internal.MainDispatcherFactory  -> kc
 META-INF/services/io.ktor.client.engine.HttpClientEngineContainer    -> OkHttpEngineContainer
 META-INF/services/io.ktor.serialization.kotlinx.KotlinxSerializationExtensionProvider
 META-INF/services/kotlinx.coroutines.CoroutineExceptionHandler       -> wc
-META-INF/services/com.arialyy.aria.core.inf.IUtil
-META-INF/services/com.arialyy.aria.core.listener.IEventListener
+META-INF/services/<third-party-package>.<SomeInterface>              -> <impl class>
+META-INF/services/<third-party-package>.<SomeListener>               -> <impl class>
 ```
+The last two are the general shape, not a coincidence: a downloader, an HTTP engine, a serialization
+provider or a plugin SPI shipped as a library all land here, and any of them can be the one whose
+absence kills startup.
 
 **Why it is hard to see**
 The error message names Kotlin coroutines, not your repack. You will spend an hour blaming the dex.
