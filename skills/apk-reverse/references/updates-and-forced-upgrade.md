@@ -22,7 +22,7 @@ to updates:
 
 A fourth case is a **resource / hot-update channel**: the app fetches a bundle (JS, a Dart/RN patch, a
 config blob, a plugin APK) that can reintroduce the behaviour you removed. That is a separate code path
-from version checking — handle it explicitly if the app has one (see §hot-update below).
+from version checking — handle it explicitly if the app has one (see §Step 5 below).
 
 ## Step 1: locate the check
 
@@ -36,7 +36,7 @@ update / upgrade / new version / check version / force update
 ```
 
 Search those in the app's string table and in class names; on heavy runtimes search the string pool,
-remembering its encoding (see `framework-runtimes.md` §string encoding — searching only one encoding
+remembering its encoding (see `framework-runtimes.md` §Locating logic without symbols — searching only one encoding
 misses half your hits, and "nothing found" is usually the encoding, not an absence).
 
 **Signals that a version check exists even if you cannot read the strings:**
@@ -143,7 +143,7 @@ If the app can fetch a bundle at runtime, version checking is not the only way y
 
 Note the flip side: a **server-issued configuration** is the same category. If the thing you removed was
 driven by remote config, the client patch holds only while the server keeps sending that config — see
-`references/ad-removal.md` §server-driven and `references/membership-and-limits.md` for the general
+`references/server-config-and-updates.md` §6 and `references/membership-and-limits.md` for the general
 rule that *client-side enforcement can be patched, server-side authority cannot*.
 
 ## The honest answer for silent version gates

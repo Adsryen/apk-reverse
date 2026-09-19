@@ -36,7 +36,7 @@ in this skill's history.
 3. **A shipping library whose SONAME does not match its filename.** A private loader is often
    named for its role while sitting under an innocuous filename. Read `DT_SONAME` from
    `.dynamic`, not the file name — `probe_deps`-style parsing of `PT_DYNAMIC` (see
-   `native-and-so.md` §forged headers) gives you the truth. A `lib<something>.so` claiming
+   `native-tamper-and-suicide.md` §Forged section headers) gives you the truth. A `lib<something>.so` claiming
    `soname = liblinkerloader.so` is a private ELF loader.
 
 Supporting tells: `assets/` carrying a small text descriptor naming the protector and its version;

@@ -1,6 +1,6 @@
 ---
 name: apk-reverse
-description: Reverse engineer, debloat, de-ad, patch, or re-sign Android APKs, and analyze their runtime and server-side behavior. Use when a task involves an .apk/.aab/.dex/.so sample, smali or dex patching, Frida/objection runtime hooking, repacking and re-signing, removing ads or SDK trackers, probing a mobile app's HTTP API, or deciding whether a client-side patch is even capable of achieving the goal. Covers recon, anti-tamper, ad removal, membership/paywall limits, dex-level surgical patching, repack pitfalls, device and emulator setup, and a hard-won failure catalogue. Load the body before planning any patch work: it opens with a symptom index and four gates that must be cleared first.
+description: "Reverse engineer, debloat, de-ad, patch, or re-sign Android APKs, and analyze their runtime and server-side behavior. Use when a task involves an .apk/.aab/.dex/.so sample, smali or dex patching, Frida/objection runtime hooking, repacking and re-signing, removing ads or SDK trackers, probing a mobile app's HTTP API, or deciding whether a client-side patch is even capable of achieving the goal. Covers recon, anti-tamper, ad removal, membership/paywall limits, dex-level surgical patching, repack pitfalls, device and emulator setup, and a hard-won failure catalogue. Load the body before planning any patch work: it opens with a symptom index and four gates that must be cleared first."
 ---
 
 # APK Reverse Engineering & Patching
@@ -48,6 +48,57 @@ Ads, paywalls, feature gates, integrity checks and update gates live in differen
 native, Dart/Unity, server). Patching the wrong layer either does nothing or breaks the app. If a
 patch "had no effect", the diagnosis was wrong — go back to classification instead of patching harder.
 → `references/recon.md`, then the layer-specific file the symptom index points at
+
+## Coverage — what this skill claims, and what it does not
+
+The failure this section prevents is not ignorance. It is **a confident wrong answer produced by
+applying the nearest available procedure to a target it was never written for.** A documented method
+that almost fits is more dangerous than no method at all, because it arrives with a plan, a
+vocabulary and a set of reassuring numbers.
+
+**Covered, by verified mechanisms:**
+
+- Client-side ads, promos and splash/popup/tab configuration — including the server-issued UI config
+  that has no SDK to find (`ad-removal.md`, `server-config-and-updates.md`).
+- Deciding whether a membership, paywall or feature gate is *client-enforceable* at all, and saying
+  so plainly when it is not (`membership-and-limits.md`, `account-gates.md`).
+- dex-level surgical patching: equal-length byte edits and dexlib2 method rewrites, plus the header,
+  verifier and alignment rules that decide whether the build loads at all (`dex-patching.md`,
+  `byte-level-patching.md`, `patch-audit.md`).
+- Repacking, signing, installing, and the install refusals that look like a broken build
+  (`repack-and-sign.md`).
+- Packers, custom loaders and code virtualization: identifying them, measuring the validation
+  boundary, and the routes that survive it (`packers.md`,
+  `code-virtualization-and-custom-linkers.md`).
+- The native layer: `.so` hosts, tamper-triggered self-termination, forged ELF structure, and
+  neutralising a terminate path without freezing the process (`native-and-so.md`,
+  `native-tamper-and-suicide.md`).
+- Flutter / Dart AOT: pinning the engine version, decoding the object pool, locating and patching
+  business logic inside `libapp.so` (`dart-aot.md`).
+- Runtime analysis with Frida, server-side API probing, feature-scoped TLS failures, update and
+  forced-upgrade neutralisation, and the verification discipline everything above rests on.
+
+**Not covered — say so rather than improvise:**
+
+- **Unity / IL2CPP logic recovery.** `framework-runtimes.md` identifies the runtime and establishes
+  that the dex is not the battlefield; it does not carry the IL2CPP equivalent of `dart-aot.md`.
+  There is no verified recipe here for locating a method inside `libil2cpp.so` plus
+  `global-metadata.dat`.
+- **React Native / Hermes bytecode** and Cordova/hybrid internals, beyond runtime identification and
+  the generic "find the string, then find what references it" approach.
+- **iOS / `.ipa` of any kind.** Every device, signing and packaging instruction here is Android.
+- **Defeating a server-side authority.** `server-api.md` exists to determine *who owns a gate*, not
+  to break an authorization the server performs.
+- **A general unpacker, or an anti-detection arms race.** `detection-and-anti-analysis.md` decides by
+  cost and often concludes "switch to static"; it is not a catalogue of evasion for every detector
+  you might meet.
+
+**The fallback, as an instruction:** if the target does not match that list, or no symptom-index row
+matches, **stop and classify before choosing a branch.** Answer the thirteen questions first. If the
+shape still does not fit — an unknown runtime, a mechanism you cannot name — say exactly that, and
+propose the cheapest experiment that would identify it, rather than taking the closest documented
+route and applying it anyway. A wrong branch here does not fail loudly: it produces an artifact that
+builds, runs, and does the wrong thing.
 
 ## Symptom index — a matching row is a stop signal
 
@@ -128,7 +179,7 @@ Answer these before touching a tool. Every one of them changes the whole plan.
    - Feature flag, UI gate, debug switch → usually client-side
    - Anything decided by an API response → server-side → `references/server-api.md`
 3. **Is the app's own code in plain dex, or moved to native/Flutter/Unity?**
-   Plain dex → you can patch. Flutter (`libflutter.so` + `libapp.so`) / Unity (`libil2cpp.so`) / pure native → different toolchain entirely. See `references/recon.md` §code-location and `references/framework-runtimes.md`.
+   Plain dex → you can patch. Flutter (`libflutter.so` + `libapp.so`) / Unity (`libil2cpp.so`) / pure native → different toolchain entirely. See `references/recon.md` §Where does the app's own code live and `references/framework-runtimes.md`.
       **Runtime check (cheap -- do it before committing to a layer):** hook the obvious Java classes for the UI you care about, then reproduce that UI. If those hooks fire, the behavior is Java-owned. If they fire **zero times** while the UI is plainly on screen, the behavior is drawn by the runtime or by native code, and a dex-only plan will stall. Do not keep hunting in dex after a zero-hit probe -- that is the most expensive wrong turn in this skill's history.
 4. **What must the deliverable be able to do?** Write the answer as a testable sentence before
    planning anything, then re-read it at every checkpoint. This is the drift guard, and the drift it

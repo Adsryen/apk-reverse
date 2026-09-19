@@ -337,7 +337,7 @@ Java.perform(function () {
 });
 ```
 
-Read the log after driving the UI. `RAW-URL` (with no `OKHTTP` events) is how you learn the request went over `HttpsURLConnection` — a different trust path entirely (`references/server-api.md` § TLS). `THROW` is how you learn an upper layer swallowed the real error.
+Read the log after driving the UI. `RAW-URL` (with no `OKHTTP` events) is how you learn the request went over `HttpsURLConnection` — a different trust path entirely (`references/tls-and-cert.md` §If OkHttp is the failing path). `THROW` is how you learn an upper layer swallowed the real error.
 
 ```bash
 # pull the record (app-private path needs root to read)
@@ -357,7 +357,7 @@ adb -s <serial> shell "su -c 'cat /data/user/0/<app.package>/files/probe.log'" >
    });
    ```
 3. **Is that code path reached at all?** Layer 4 settles it: if `THROW` events show the app failing earlier, your hook's call site is never executed and no amount of hooking will help.
-4. **Did your UI action trigger business logic?** A tap that looks fine but fails a local form check returns before any network call. Verify the input actually reached the field (`references/environment.md` § UI automation), not just that the button animated.
+4. **Did your UI action trigger business logic?** A tap that looks fine but fails a local form check returns before any network call. Verify the input actually reached the field (`references/environment.md` §Driving the UI from adb), not just that the button animated.
 
 ## `Java.choose` also matches dead instances
 

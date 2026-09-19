@@ -1,80 +1,271 @@
-"""Pre-commit checks: every script parses and answers --help; every referenced file exists."""
+#!/usr/bin/env python3
+"""Pre-commit checks for this repository.
+
+Assumed layout -- the one the `skills` CLI resolves:
+
+    README.md                             repository-level docs (root)
+    skills/<skill-name>/SKILL.md          the skill itself
+    skills/<skill-name>/references/*.md   loaded on demand
+    skills/<skill-name>/scripts/*         run, not read
+
+Every skill under `skills/` is discovered automatically (up to three levels;
+a SKILL.md at a shallower level shadows anything nested below it, which is the
+CLI's own rule), so adding a second skill requires no change to this script.
+
+Per skill:
+  1. frontmatter exists, `name` matches the directory name, `description` <= 1024
+  2. every scripts/*.py parses and answers --help without a traceback
+  3. every `references/X.md` / `scripts/X.py` reference resolves inside that skill
+  4. every reference file is reachable from that skill's SKILL.md or the README
+  5. every script is mentioned somewhere in the docs
+
+On the root README:
+  6. every path it names is an explicit `skills/<name>/...` path that exists
+"""
 import ast
 import os
 import re
 import subprocess
 import sys
 
+try:
+    import yaml
+except ImportError:   # the skills CLI is the real authority; this is a local gate
+    yaml = None
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
-os.chdir(ROOT)
+SKILLS_DIR = os.path.join(ROOT, 'skills')
+README = os.path.join(ROOT, 'README.md')
+
+REF_RE = re.compile(r'`?(references/[A-Za-z0-9_\-]+\.md)')
+SCRIPT_RE = re.compile(r'`?(scripts/[A-Za-z0-9_\-]+\.(?:py|js))')
+NAMED_PATH_RE = re.compile(
+    r'skills/(?P<skill>[a-z0-9\-]+)/(?P<sub>references|scripts)/'
+    r'(?P<file>[A-Za-z0-9_\-]+\.(?:md|py|js))')
+BARE_PATH_RE = re.compile(r'(?<![\w/])(?P<sub>references|scripts)/'
+                          r'(?P<file>[A-Za-z0-9_\-]+\.(?:md|py|js))')
 
 fail = []
 
-print("== python syntax + --help ==")
-for name in sorted(os.listdir('scripts')):
-    if not name.endswith('.py'):
-        continue
-    path = os.path.join('scripts', name)
+
+def read(path):
+    with open(path, encoding='utf-8') as fh:
+        return fh.read()
+
+
+def discover_skills():
+    """Return [(name, skill_dir)] for every skills/<...>/SKILL.md."""
+    found = []
+    if not os.path.isdir(SKILLS_DIR):
+        return found
+    for dirpath, dirnames, filenames in os.walk(SKILLS_DIR):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith('.'))
+        rel = os.path.relpath(dirpath, SKILLS_DIR)
+        depth = 0 if rel == '.' else rel.count(os.sep) + 1
+        if depth > 3:
+            dirnames[:] = []
+            continue
+        if 'SKILL.md' in filenames:
+            found.append((rel.replace(os.sep, '/'), dirpath))
+            dirnames[:] = []          # shallower SKILL.md shadows what is below
+    return sorted(found)
+
+
+NAME_RE = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+
+
+def check_frontmatter(name, skill_dir):
+    """Validate the frontmatter the way the CLI will, not merely its presence.
+
+    This has to be a real parse. Frontmatter that satisfies a regex can still be
+    rejected by a YAML parser -- an unquoted `description` containing ": " does
+    it, because the colon starts a nested mapping -- and the `skills` CLI then
+    reports "No skills found" and installs nothing at all.
+    """
+    path = os.path.join(skill_dir, 'SKILL.md')
+    text = read(path)
+    m = re.match(r'^---\r?\n(.*?)\r?\n---\r?\n', text, re.S)
+    if not m:
+        fail.append('%s: no YAML frontmatter block' % path)
+        return
+    raw = m.group(1)
+
+    if yaml is None:
+        print('  WARN PyYAML is not installed, so the frontmatter was not parsed')
+        line = re.search(r'^description:(.*)$', raw, re.M)
+        if line:
+            value = line.group(1)
+            if value[:1] not in ('"', "'", '>', '|') and ': ' in value:
+                fail.append('%s: unquoted description contains ": ", which a YAML '
+                            'parser rejects; quote the value' % path)
+        return
+
     try:
-        ast.parse(open(path, encoding='utf-8').read())
-    except SyntaxError as e:
-        fail.append('%s: syntax error %s' % (path, e))
-        print('  FAIL %s' % path)
-        continue
-    r = subprocess.run([sys.executable, '-B', path, '--help'],
-                       capture_output=True, text=True, timeout=60)
-    # A script may exit non-zero on --help if it uses the "print usage and exit 2"
-    # convention. That is acceptable; a traceback is not.
-    crashed = 'Traceback (most recent call last)' in (r.stderr or '')
-    helped = bool((r.stdout or '').strip()) or bool(r.stderr)
-    ok = (not crashed) and helped
-    verdict = 'ok' if r.returncode == 0 and not crashed else \
-              ('usage-ok rc=%d' % r.returncode if ok else 'CRASH rc=%d' % r.returncode)
-    print('  %-32s %s' % ('%s --help' % name, verdict))
-    if not ok:
-        fail.append('%s --help crashed: %s' % (path, (r.stderr or '')[:300]))
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        detail = str(exc).splitlines()[0]
+        fail.append('%s: frontmatter is not valid YAML (%s); the skills CLI '
+                    'skips a skill whose frontmatter will not parse'
+                    % (path, detail))
+        return
+    if not isinstance(data, dict):
+        fail.append('%s: frontmatter is not a YAML mapping' % path)
+        return
 
-print("\n== markdown references resolve ==")
-refs = set(os.listdir('references'))
-scripts = set(os.listdir('scripts'))
-missing = []
-for name in ['SKILL.md', 'README.md'] + ['references/' + f for f in refs if f.endswith('.md')]:
-    text = open(name, encoding='utf-8').read()
-    for m in re.finditer(r'`?(references/[A-Za-z0-9_\-]+\.md)', text):
-        target = m.group(1).split('/')[1]
-        if target not in refs:
-            missing.append('%s -> %s' % (name, m.group(1)))
-    for m in re.finditer(r'`?(scripts/[A-Za-z0-9_\-]+\.(?:py|js))', text):
-        target = m.group(1).split('/')[1]
-        if target not in scripts:
-            missing.append('%s -> %s' % (name, m.group(1)))
-if missing:
-    for x in sorted(set(missing)):
-        print('  MISSING %s' % x)
-    fail.extend(missing)
-else:
-    print('  all referenced reference/script paths exist')
+    got = data.get('name')
+    if not got:
+        fail.append('%s: frontmatter has no `name`' % path)
+    elif str(got) != name:
+        fail.append('%s: frontmatter name %r does not match directory %r'
+                    % (path, got, name))
+    elif not NAME_RE.match(str(got)) or len(str(got)) > 64:
+        fail.append('%s: name %r violates the spec (lowercase alphanumerics and '
+                    'single hyphens, max 64 chars)' % (path, got))
 
-print("\n== every reference file is reachable from SKILL.md or README.md ==")
-bodies = open('SKILL.md', encoding='utf-8').read() + open('README.md', encoding='utf-8').read()
-unlisted = [f for f in sorted(refs) if f.endswith('.md') and f not in bodies]
-for f in unlisted:
-    print('  UNLISTED references/%s' % f)
-if unlisted:
-    fail.append('unlisted references: %s' % unlisted)
+    desc = data.get('description')
+    if not desc:
+        fail.append('%s: frontmatter has no `description`' % path)
+    else:
+        desc = str(desc)
+        if len(desc) > 1024:
+            fail.append('%s: description is %d chars (spec max 1024)'
+                        % (path, len(desc)))
+        elif len(desc) < 40:
+            fail.append('%s: description is only %d chars, too short to tell an '
+                        'agent when this skill applies' % (path, len(desc)))
 
-print("\n== every script is mentioned somewhere in the docs ==")
-all_docs = bodies
-for f in refs:
-    if f.endswith('.md'):
-        all_docs += open('references/' + f, encoding='utf-8').read()
-undoc = [s for s in sorted(scripts) if s.endswith(('.py', '.js')) and s not in all_docs]
-for s in undoc:
-    print('  UNDOCUMENTED scripts/%s' % s)
-if undoc:
-    fail.append('undocumented scripts: %s' % undoc)
 
-print("\n== result: %d problem(s) ==" % len(fail))
-for f in fail:
-    print('  - %s' % f)
-sys.exit(1 if fail else 0)
+def check_scripts(skill_dir):
+    scripts = os.path.join(skill_dir, 'scripts')
+    if not os.path.isdir(scripts):
+        return
+    for name in sorted(os.listdir(scripts)):
+        if not name.endswith('.py'):
+            continue
+        path = os.path.join(scripts, name)
+        try:
+            ast.parse(read(path))
+        except SyntaxError as exc:
+            fail.append('%s: syntax error %s' % (path, exc))
+            print('  FAIL %s' % name)
+            continue
+        run = subprocess.run([sys.executable, '-B', path, '--help'],
+                             capture_output=True, text=True, timeout=60,
+                             cwd=ROOT)
+        # A script may exit non-zero on --help under the "print usage, exit 2"
+        # convention. That is acceptable; a traceback is not.
+        crashed = 'Traceback (most recent call last)' in (run.stderr or '')
+        helped = bool((run.stdout or '').strip()) or bool(run.stderr)
+        ok = (not crashed) and helped
+        verdict = 'ok' if run.returncode == 0 and not crashed else \
+                  ('usage-ok rc=%d' % run.returncode if ok else
+                   'CRASH rc=%d' % run.returncode)
+        print('  %-32s %s' % (name, verdict))
+        if not ok:
+            fail.append('%s --help crashed: %s' % (path, (run.stderr or '')[:300]))
+
+
+def check_references(name, skill_dir, root_docs):
+    """Resolve in-skill references, and confirm every file is reachable."""
+    ref_dir = os.path.join(skill_dir, 'references')
+    script_dir = os.path.join(skill_dir, 'scripts')
+    refs = set(os.listdir(ref_dir)) if os.path.isdir(ref_dir) else set()
+    scripts = set(os.listdir(script_dir)) if os.path.isdir(script_dir) else set()
+
+    # Documents whose relative paths are rooted at the skill directory.
+    own = [os.path.join(skill_dir, 'SKILL.md')]
+    own += [os.path.join(ref_dir, f) for f in sorted(refs) if f.endswith('.md')]
+
+    missing = []
+    for doc in own:
+        if not os.path.exists(doc):
+            continue
+        text = read(doc)
+        for m in REF_RE.finditer(text):
+            if m.group(1).split('/')[1] not in refs:
+                missing.append('%s -> %s' % (os.path.relpath(doc, ROOT), m.group(1)))
+        for m in SCRIPT_RE.finditer(text):
+            if m.group(1).split('/')[1] not in scripts:
+                missing.append('%s -> %s' % (os.path.relpath(doc, ROOT), m.group(1)))
+    if missing:
+        for x in sorted(set(missing)):
+            print('  MISSING %s' % x)
+        fail.extend(missing)
+
+    # Reachability: nothing may be orphaned from the skill entry point.
+    bodies = read(os.path.join(skill_dir, 'SKILL.md')) + root_docs
+    for f in sorted(refs):
+        if f.endswith('.md') and f not in bodies:
+            fail.append('%s: references/%s is not mentioned anywhere' % (name, f))
+            print('  UNLISTED references/%s' % f)
+
+    all_docs = bodies
+    for f in sorted(refs):
+        if f.endswith('.md'):
+            all_docs += read(os.path.join(ref_dir, f))
+    for s in sorted(scripts):
+        if s.endswith(('.py', '.js')) and s not in all_docs:
+            fail.append('%s: scripts/%s is undocumented' % (name, s))
+            print('  UNDOCUMENTED scripts/%s' % s)
+
+
+def check_readme():
+    """README paths must be explicit and must exist."""
+    text = read(README)
+    if not os.path.isdir(SKILLS_DIR):
+        fail.append('no skills/ directory at the repository root')
+        return
+    skills = {d for d, _ in discover_skills()}
+    named = set()
+    for m in NAMED_PATH_RE.finditer(text):
+        named.add(m.group(0))
+        skill, sub, fname = m.group('skill'), m.group('sub'), m.group('file')
+        if skill not in skills:
+            fail.append('README.md: names unknown skill %r' % skill)
+            print('  UNKNOWN SKILL skills/%s' % skill)
+        elif not os.path.exists(os.path.join(SKILLS_DIR, skill, sub, fname)):
+            fail.append('README.md: %s does not exist' % m.group(0))
+            print('  MISSING %s' % m.group(0))
+    # Bare relative paths are ambiguous once there is more than one skill, so the
+    # README must not use them at all.
+    stripped = NAMED_PATH_RE.sub('', text)
+    for m in BARE_PATH_RE.finditer(stripped):
+        fail.append('README.md: bare path %r should be skills/<name>/%s'
+                    % (m.group(0), m.group(0)))
+        print('  BARE PATH %s' % m.group(0))
+
+
+def main():
+    skills = discover_skills()
+    print('== skills discovered ==')
+    if not skills:
+        print('  none (expected at least skills/<name>/SKILL.md)')
+    for name, _ in skills:
+        print('  skills/%s' % name)
+
+    print('\n== frontmatter ==')
+    for name, skill_dir in skills:
+        check_frontmatter(name, skill_dir)
+    print('  %d checked' % len(skills))
+
+    root_docs = read(README)
+    for name, skill_dir in skills:
+        print('\n== %s: python syntax + --help ==' % name)
+        check_scripts(skill_dir)
+        print('\n== %s: reference and script paths resolve ==' % name)
+        before = len(fail)
+        check_references(name, skill_dir, root_docs)
+        if len(fail) == before:
+            print('  all referenced reference/script paths exist')
+
+    print('\n== README paths are explicit and exist ==')
+    check_readme()
+
+    print('\n== result: %d problem(s) ==' % len(fail))
+    for f in fail:
+        print('  - %s' % f)
+    return 1 if fail else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

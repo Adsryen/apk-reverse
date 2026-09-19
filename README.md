@@ -34,8 +34,9 @@ clean log is not one of them. Anything short of all six is a checkpoint, and sho
 checkpoint with what remains.
 
 If you are an agent reading this: the cheapest possible first command is
-`python scripts/doctor.py`. It tells you which of these tools exist here, which scripts can actually
-run, and whether something in the environment is already poisoning your measurements.
+`python skills/apk-reverse/scripts/doctor.py`. It tells you which of these tools exist here, which
+scripts can actually run, and whether something in the environment is already poisoning your
+measurements.
 
 ## What it is good at
 
@@ -75,6 +76,10 @@ run, and whether something in the environment is already poisoning your measurem
   runtime.
 
 ## Structure
+
+`SKILL.md`, `references/` and `scripts/` are all inside the skill directory, `skills/apk-reverse/`.
+Everything at the repository root is maintenance tooling shared across skills, not part of an
+installed skill.
 
 ```
 SKILL.md                  a procedure with gates, not background reading:
@@ -229,20 +234,29 @@ scripts/                  parameterized, path-agnostic
 
 ## Install
 
-Drop this directory where your agent finds skills, e.g.:
+This repository is a **skills repository**: the skill lives at `skills/apk-reverse/`, which is the
+layout the `skills` CLI resolves, and it is installed by name rather than by copying a directory:
 
 ```
-<skills-dir>/apk-reverse/SKILL.md
+npx skills add newliver666/apk-reverse              # install every skill in the repo
+npx skills add newliver666/apk-reverse --list       # list what is here, install nothing
+npx skills add newliver666/apk-reverse --skill apk-reverse -y
+npx skills use  newliver666/apk-reverse@apk-reverse # use it once, without installing
 ```
 
-The agent loads `SKILL.md` when a task matches its description, and pulls in
-`references/*` only as needed. No global state, no machine-specific paths.
+The CLI symlinks the skill into your agent's skills directory by default (`--copy` makes independent
+copies instead), and `-g` installs for every project rather than the current one. With one skill in
+the repository, `--skill apk-reverse` is redundant today; it is written out here because it is what
+selects a single skill once a second one exists.
+
+Once installed, the agent loads `SKILL.md` when a task matches its description, and pulls in
+`references/*` only as needed. No global state, no machine-specific paths, and no build step.
 
 ## Requirements
 
-Nothing is mandatory; each script checks what it needs. `scripts/doctor.py` reports which of these
-are present here, which scripts can therefore run, and — usefully — which tools exist somewhere other
-than PATH.
+Nothing is mandatory; each script checks what it needs. `skills/apk-reverse/scripts/doctor.py` reports
+which of these are present here, which scripts can therefore run, and — usefully — which tools exist
+somewhere other than PATH.
 
 If your toolchain lives outside PATH (a project-local `tools/` directory, a versioned SDK folder, a
 runnable `.jar` instead of a command), set `APKREV_TOOLS` to one or more directories and `doctor.py`
@@ -259,7 +273,7 @@ Linux; where a snippet is POSIX-only it is labelled. Nothing here assumes a Unix
 | Tool | Used for |
 |---|---|
 | Python 3.9+ | all scripts |
-| `ddc` (optional but recommended) | single-binary dex→Java decompiler with query subcommands (`info`, `findrefs`, `strings --with-locations`, per-class decompile). No JVM. Turns string cross-referencing from a crawl into a lookup, and reports package identity reliably — see `references/toolchain.md` |
+| `ddc` (optional but recommended) | single-binary dex→Java decompiler with query subcommands (`info`, `findrefs`, `strings --with-locations`, per-class decompile). No JVM. Turns string cross-referencing from a crawl into a lookup, and reports package identity reliably — see `skills/apk-reverse/references/toolchain.md` |
 | `baksmali` / `smali` + `dexlib2` jars | disassembly, assembly, surgical patching |
 | JDK (`javac`, `java`) | building/running the dexlib2 patcher; also provides `keytool`/`jarsigner` |
 | Android SDK build-tools (`aapt`, `zipalign`, `apksigner`) | manifest info, alignment, signing. **`apksigner` is the signer to use** — `jarsigner` rewrites the archive and breaks the alignment Android R+ requires |
@@ -269,13 +283,14 @@ Linux; where a snippet is POSIX-only it is labelled. Nothing here assumes a Unix
 | a rooted device or emulator | anything beyond static analysis |
 
 None of these need to be on `PATH`: every script accepts an explicit path for the
-tools it shells out to, and `references/toolchain.md` covers finding an install that
-`PATH` does not know about (the common case for `apksigner` and `keytool`).
+tools it shells out to, and `skills/apk-reverse/references/toolchain.md` covers finding
+an install that `PATH` does not know about (the common case for `apksigner` and
+`keytool`).
 
 ## Read this first
 
-`references/pitfalls.md`. It is the most valuable file here — every entry is a failure
-that produced a broken artifact while looking completely healthy.
+`skills/apk-reverse/references/pitfalls.md`. It is the most valuable file here — every entry is a
+failure that produced a broken artifact while looking completely healthy.
 
 The four that hurt most:
 
@@ -294,3 +309,22 @@ The four that hurt most:
 Built for working on your own applications, on samples you are authorized to analyze,
 and in CTF/competition sandboxes. It contains no vendored third-party binaries and no
 target-specific data.
+
+What it covers, and what it deliberately does not, is stated at the top of `SKILL.md`
+under **Coverage**. The short version: Android only (no iOS), and deep on the layers
+that have been worked through for real — dex patching, repacking, packers and custom
+loaders, native tamper response, and Flutter/Dart AOT. Unity/IL2CPP logic recovery,
+React Native/Hermes bytecode internals, and defeating a server-side authority are **not**
+covered, and the skill is written to say so and stop rather than apply the nearest
+documented procedure to a target it was not written for.
+
+## Repository maintenance
+
+Three tools live at the root and are not part of the installed skill:
+
+```
+check_repo.py      every skill discovered, frontmatter valid, scripts runnable,
+                   documented paths resolve, README paths explicit and existing
+check_refs.py      every `file.md` §section cross-reference reaches a real heading
+build_scripts.py   audit for machine-specific leftovers (absolute paths, credentials)
+```

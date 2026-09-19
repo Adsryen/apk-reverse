@@ -4,9 +4,10 @@ Load this when you are choosing tools, when a tool produces an answer that smell
 something is not installed. It is a map, not a tutorial: each entry says what the tool is *for*, how
 to drive it non-interactively, and the failure mode that wastes time.
 
-**Prefer tools you can drive from a command line.** An agent cannot click. Tools that exist only as
-a GUI are listed where they matter, marked as requiring a human, so you can ask for that instead of
-stalling or silently substituting a weaker method.
+**Prefer tools you can drive from a command line.** An agent cannot click. A tool that ships only a
+GUI is not automatically out of reach — check for a headless or MCP path first, which is an
+install-and-set-up step rather than a reason to substitute the tool. When no such route exists, ask
+for a human instead of stalling or silently downgrading to a weaker method.
 
 ## Tier 0 — present on almost any machine, no install
 
@@ -99,7 +100,7 @@ not that the method is empty.
 | `capstone` (python) | library | decoding in your own scripts — see the silent-stop trap below |
 | `keystone` (python) | library | assembling a short patch when you are editing bytes by hand |
 | `pyelftools` (python) | library | **section-based — unreliable on hardened targets.** Prefer hand-walking `PT_LOAD`/`PT_DYNAMIC`, as `scripts/elf_plt.py` does |
-| IDA Pro | GUI | human-driven. Ask for it when decompiler output is genuinely needed; do not pretend a raw disassembly is equivalent |
+| IDA Pro | GUI, **or headless via `idalib-mcp`** | the strongest decompiler output. Do not assume it needs a human in front of it — a headless MCP server exists (see *MCP tool servers* below). Ask for a human only when that setup is genuinely unavailable |
 | `x64dbg` | GUI, Windows | human-driven live debugging of a native Windows target |
 | `gdb` / `lldb` | CLI | live debugging where a device or emulator allows it |
 
@@ -111,6 +112,64 @@ completeness matters (`native-tamper-and-suicide.md` §Scanner traps).
 **Disassembler output is a hypothesis.** Fixed-width architectures (aarch64) decode almost any
 4-byte window into *some* instruction, so a wrong start offset yields plausible-looking garbage.
 Bound your window with a known entry point or a known call site.
+
+## MCP tool servers — an external dependency, not a tool on the shelf
+
+An MCP server is neither a CLI tool nor one of the scripts here. It is a **separate installation plus
+a running process**: something to install, a service to start, usually an extension to load, often an
+authorization step. Listing one beside `readelf` would imply it is already present. Declare it as a
+dependency with its prerequisites, and check whether it is actually available *before* planning work
+that needs it — discovering this mid-task is the "missing tool" failure again.
+
+### IDA Pro, headless
+
+IDA does **not** require a human at a GUI. `mrexodia/ida-pro-mcp` ships `idalib-mcp`, a headless MCP
+server that drives an IDA database with no GUI process at all:
+
+```sh
+uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable   # open a binary up front
+uv run idalib-mcp --host 127.0.0.1 --port 8745                      # open databases on demand
+uv run idalib-mcp --stdio                                           # for stdio-based clients
+```
+
+Prerequisites, all of which must be arranged before the first call: IDA Pro 8.3+ (9 recommended;
+**IDA Free is not supported**), a Python 3.11+ that `idapyswitch` can select, `uv`, and an `idalib`
+activated globally via `py-activate-idalib.py`. Each open database lives in a worker process that
+outlives the supervisor and is adopted transparently by a later supervisor on the same host, so
+several sessions can share one analysis. Every tool call carries an explicit `database` argument —
+there is no implicit "current database" — and `idb_open` returns the session id you must pass.
+
+The GUI-plugin variant of the same project is deprecated upstream in favour of `idalib-mcp`; do not
+set that up for agent work.
+
+### Ghidra
+
+`LaurieWired/GhidraMCP` is a Ghidra **extension** plus a separate Python bridge, not a headless
+analysis server: Ghidra must be running with the plugin loaded (its HTTP server defaults to
+`127.0.0.1:8080`) and the bridge is another process your client starts. Treat it as requiring an
+interactive GUI session. For unattended work the shape that actually runs without a GUI is
+`analyzeHeadless` with a post-script.
+
+### The boundary: deobfuscate before you hand the binary to a model
+
+Both are LLM-driven, and they inherit the model's weaknesses. The IDA MCP authors say it plainly in
+their own README: **"LLMs will not perform well on obfuscated code"**, and they advise removing
+string encryption, import hashing, control flow flattening, code encryption and anti-decompilation
+tricks *before* asking a model to solve anything.
+
+That matters more here than in most domains, because it is precisely the shape of the targets this
+skill deals with. An OLLVM-style or virtualized binary is not a job for a model reading decompiler
+output; the deobfuscated version is a *different binary*, and producing it is the work already
+described in `code-virtualization-and-custom-linkers.md` and
+`native-tamper-and-suicide.md`. The same advice has a second half: resolve library code first
+(FLIRT/Lumina) so the model is not asked to reason about `memcpy` as if it were the program.
+
+Two consequences worth carrying into the plan:
+
+- Ask a model for **navigation and reading** — rename, comment, summarise a function, convert an
+  immediate — and verify anything that decides the patch against the disassembly yourself.
+- If the server is not installed, that is a **missing dependency to report**, not a licence to present
+  a weaker tool's output as equivalent (`packers.md`).
 
 ## Tier 3 — runtime and network
 
