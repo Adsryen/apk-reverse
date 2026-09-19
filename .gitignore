@@ -1,0 +1,36 @@
+# build artifacts
+*.class
+*.jar
+!scripts/dexpatch/*.java
+
+# working data -- never commit samples or outputs
+*.apk
+*.aab
+*.dex
+*.odex
+*.vdex
+*.oat
+*.so
+*.jks
+*.keystore
+*.pk8
+*.pem
+*.p12
+
+# local scratch
+_tmp/
+out/
+work/
+*.log
+*.jsonl
+*.pcap
+*.png
+*.jpg
+
+# python / editors
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+.idea/
+.DS_Store
