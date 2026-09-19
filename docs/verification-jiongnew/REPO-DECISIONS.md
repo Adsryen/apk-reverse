@@ -61,6 +61,28 @@ option described, and it remains untested: this target is an APK, so no evidence
 was produced here. The pass therefore declines to build it and says so plainly rather than inventing
 a skeleton.
 
+### Selective installation, measured — and what it implies for shared tooling
+
+The brief asked for the shared-tooling question to be settled by the actual install product rather
+than by preference. Measured with `npx skills add newliver666/apk-reverse --skill apk-reverse -y
+--copy` in an empty directory:
+
+- The skill is copied **whole and self-contained** into each detected agent directory — `.agents/`,
+  `.claude/`, `.kiro/`, `.pi/`, `.qwen/`, `.zcode/`, six in total on this host — plus a
+  `skills-lock.json` at the root.
+- Every file lands under `<agent>/skills/apk-reverse/`: `SKILL.md`, all 28 `references/*.md`, all 34
+  `scripts/*` including the `dexpatch/` subdirectory. **Nothing outside the skill directory is
+  installed.** The repository's root-level `docs/` and the three maintenance checkers are absent from
+  the product, as intended.
+- There is **no cross-skill sharing mechanism** in the installed layout.
+
+Consequence for this decision: had the skill been split, the two halves would each have needed their
+own copy of any shared script, or a path that points outside the skill directory — and the latter
+does not survive installation, because it is not part of the product. So the "shall we put shared
+tools in a root `shared/`" question resolves itself: it cannot work that way, and with one skill there
+is nothing to share. The record is kept here because the observation is what makes the reasoning
+checkable rather than asserted.
+
 ---
 
 ## Changes made

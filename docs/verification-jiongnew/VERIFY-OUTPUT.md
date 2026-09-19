@@ -128,7 +128,7 @@ Audit for machine-specific leftovers: absolute paths and credential literals.
 Exit code: **0**. Output (2 lines):
 
 ```
-== audit: 76 file(s) checked, 0 finding(s). Nothing was written.
+== audit: 77 file(s) checked, 0 finding(s). Nothing was written.
    re-run with --apply to copy, and with --scrub to neutralise absolute-path literals.
 ```
 
@@ -196,3 +196,45 @@ This is also why `check_refs.py` failed once during this pass and now passes: it
 cross-references **within the skill only** and has no fallback outside it, so a sentence in
 `SKILL.md` pointing at a path outside the skill directory read as dangling. It was right to
 fail; the reference was rewritten rather than the checker.
+
+**One intermittent `exit 1` from `check_repo.py` was observed and not reproduced.** During this pass
+`check_repo.py` once returned 1 while printing `result: 0 problem(s)` and 47 lines of all-`ok` script
+status — and five subsequent runs (to a file, to `$null`, and through a pipe) all returned 0 with the
+same 47 lines. The mechanism is the encoding path documented above: at `check_repo.py:153` the child
+is run with `text=True` and no fixed `encoding`, and at `:158-159` `helped` requires at least one of
+the two streams to be non-empty while `verdict` reads only `returncode`, so a decode that consumes
+both streams turns a healthy script into a recorded FAIL. Recorded rather than dismissed because a
+gate that can fail without a cause is worse than one that fails for a stated reason; if you see an
+isolated red run whose text says `0 problem(s)`, re-run before investigating the repository.
+
+---
+
+## 5. External checks — what was verified against primary sources
+
+Not a command output: a record of the facts that were re-checked before they were relied on, so a
+later reader can tell which of this pass's premises came from a live source and which did not. Kept
+here because several of them changed a decision.
+
+| Claim that was checked | Result | Source |
+|---|---|---|
+| `npx skills` command surface and flags | Confirmed **in use here**: `add <package>`, `--list`/`-l`, `--skill`/`-s`, `--copy`, `-y`, `--full-depth`, `use`, `list`, `find`, `update`, `init`, `remove`, `experimental_sync` | local `npx --yes skills --help`; [justjavac/skills README](https://raw.githubusercontent.com/justjavac/skills/main/README.md) |
+| Skill discovery rules and required frontmatter | Confirmed: containers walked one level for `skills/<name>/SKILL.md`, one extra level for `skills/<category>/<name>/SKILL.md`; a shallower `SKILL.md` shadows anything nested; `name` and `description` required; `metadata.internal` hides a skill | same README (§Skill Discovery, §Creating Skills), and [agentskills.io specification](https://agentskills.io/specification.md) |
+| `skills/<name>/` is the layout the CLI resolves | Confirmed by the repair commit already in history (`Restructure to the skills/<name>/ layout the skills CLI resolves`) and by `--list` finding 1 skill both before and after this pass | live `npx skills add newliver666/apk-reverse --list` |
+| `idalib-mcp` exists, is the recommended headless route, and its prerequisites | Confirmed, with one update worth recording: the IDA **GUI plugin is no longer recommended and will be deprecated** in favour of `idalib-mcp`. Prerequisites as stated: Python 3.11+, IDA Pro 8.3+ (9 recommended), **IDA Free unsupported**, and idalib activated globally. Headless usage: `uv run idalib-mcp --host 127.0.0.1 --port 8745 <binary>` or `--stdio`. Workers are persistent, adopt existing sessions, and self-exit on idle TTL | [mrexodia/ida-pro-mcp README](https://raw.githubusercontent.com/mrexodia/ida-pro-mcp/main/README.md) |
+| GhidraMCP is a GUI extension + Python bridge, not headless | Confirmed. Install is "Import the plugin into Ghidra"; the bridge is `bridge_mcp_ghidra.py` talking to `http://127.0.0.1:8080/`. Unattended use therefore means `analyzeHeadless` plus a post-script, not this bridge | [LaurieWired/GhidraMCP README](https://raw.githubusercontent.com/LaurieWired/GhidraMCP/main/README.md) |
+| The IDA MCP author's warning about LLMs on obfuscated code | Confirmed verbatim in the README: LLMs will not perform well on obfuscated code, and string encryption / import hashing / control-flow flattening / code encryption / anti-decompilation tricks should be removed first. **Not applied in this pass** — the target is not an OLLVM sample, so citing it here would have been decoration | same README (§Tips for Enhancing LLM Accuracy) |
+| blutter's supported scope and build model | Confirmed: **Android `libapp.so`, arm64 only**; auto-detects the Dart version from the engine and builds the matching Dart VM; needs a Haskell-free C++ toolchain (g++>=13 / clang>=16 / MSVC); `bin/` holds per-version executables named `blutter_dartvm<ver>_<os>_<arch>`; output includes `asm/`, `objs.txt`, `pp.txt`, `blutter_frida.js`. Its own TODO still lists obfuscated apps as incompletely supported | [worawit/blutter README](https://raw.githubusercontent.com/worawit/blutter/main/README.md) |
+| No prebuilt blutter binary is published | Confirmed by measurement: the repo has **zero GitHub releases** and its `bin/` is gitignored. Building is mandatory — and, measured here, costs **≈78 s**, not "tens of minutes" | local run; blutter README |
+| aotopsy's scope, accuracy claims and hard limits | Confirmed from its README: pure Go, static, **no Dart VM and no SDK compile**; ARM64 + x86_64; Dart 2.10–3.13; claims 90.2% name-recovery agreement and 0% fabrication. Its stated **hard AOT floors** match what this pass saw: instance field names ~97–99% absent, local/captured names gone, truly polymorphic dispatch not statically resolvable | [BroNils/aotopsy README](https://raw.githubusercontent.com/BroNils/aotopsy/main/README.md) |
+| Which Flutter SDK ships Dart 3.6.0 | **Not confirmed from an authoritative table.** The engine banner (`3.6.0 (stable) (Thu Dec 5 07:46:24 2024 -0800)`) and the snapshot hash are decisive for our purposes, and no `3.6.2` string exists in either `.so`. The Flutter SDK version number was deliberately *not* asserted anywhere in the repository output, because the release-notes page that would have settled it was not reachable in a form that could be quoted | banner + byte search, both local and observed |
+
+Two checks changed what the repository says. First, the blutter build budget and compiler floor were
+both wrong in the documentation and are now corrected from measurement. Second, aotopsy turned out to
+be the no-toolchain route, which is why `dart-aot.md` now names a front end as a dependency instead of
+implying the object pool decodes itself.
+
+One premise from the original brief did **not** survive: "GNU readelf is on PATH" is false on this
+host. `readelf` resolves to pyelftools' own `readelf.py`, whose CLI rejects `--dyn-syms` and `-W` as
+unrecognized arguments, and MinGW `objdump`/`nm` (binutils 2.28) reject every aarch64 ELF with
+`File format not recognized`. All aarch64 cross-checks in this pass therefore went through the
+pyelftools / lief / capstone **library APIs**.
