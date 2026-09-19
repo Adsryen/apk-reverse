@@ -66,6 +66,11 @@ references/               loaded on demand, one topic each
                               mechanisms, how to tell which one actually fires, how to find the
                               site, forged section headers, function boundaries from
                               PT_GNU_EH_FRAME, scanner traps, and neutralising safely
+  detection-and-anti-analysis.md  when the app fights back or the tool cannot run here: telling
+                              detection apart from a broken environment, deciding by cost instead
+                              of escalating, recognising an environment where dynamic analysis
+                              simply does not work, and keeping the "blocks my analysis" question
+                              separate from "blocks the deliverable"
   toolchain.md                what to install, how to invoke it non-interactively, which tools
                               are GUI-only, version-alignment traps, working offline
   long-task-discipline.md     live record, conclusion grading, drift control, timeout and
