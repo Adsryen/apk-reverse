@@ -41,6 +41,9 @@ references/               loaded on demand, one topic each
                               boundary with single-variable tests, choosing a native host
   framework-runtimes.md       Flutter / React Native / Unity: which layer owns the UI, and how to
                               find logic when there are no symbols (string encoding traps)
+  dart-aot.md                 Dart AOT in depth: version pinning and building a matching decompiler,
+                              the object pool and reference indexes, register/boolean conventions,
+                              the three signatures that identify business logic, locating, patching
   native-and-so.md            .so hosts, DT_NEEDED vs JNI_OnLoad, relocation limits,
                               relocation-free bootstrapping, replacing Java methods natively,
                               and which ABI/library is *actually loaded and executing*
@@ -67,6 +70,10 @@ scripts/                  parameterized, path-agnostic
   dex_strpatch.py             byte-level string patch with a string_ids ordering guard
   dex_classdiff.py            prove a dex edit was surgical
   dex_strings.py              strings/URLs/SDK markers without a decompiler
+  dart_pool_strings.py        recover literals from a Dart AOT snapshot (framed entries, the
+                              one-byte vs UTF-16 split, file offsets, run-length noise filter)
+  dart_pprefs.py              build/query the object-pool -> code-site index for a Dart snapshot
+  dart_disasm.py              annotated windowed disassembly of Dart AOT code + B/BL caller index
   find_refs.py                count callers of a method before patching it
   repack.py                   rebuild APK, strip only signatures, sign, verify
   devsh.py                    quoting-safe ADB shell helper

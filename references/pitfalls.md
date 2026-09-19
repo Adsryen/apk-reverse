@@ -603,3 +603,41 @@ as a finding, and findings propagate into the plan.
   `scripts/blob_decode.py`).
 - **State a negative result with its scope**: "no UTF-8 or UTF-16LE literal match in this artifact"
   is a finding. "The string does not exist" is a guess wearing a finding's clothes.
+
+## P26. A self-built analysis script fails in a way that reads as a target finding
+
+**Symptom**
+A purpose-written script emits something that looks like a result -- an offset table, a count, a
+"no matches" verdict -- and it is wrong. Nothing in the output says so, so it gets recorded as a
+finding and the plan is built on top of it.
+
+**Root cause**
+Three variants, all hit in a single project:
+
+- **A silent arithmetic error.** `(w >> 10) & 0xFFF << 12` binds as `& (0xFFF << 12)` in Python, so
+  the intended mask silently became a different one. The script ran clean and printed a plausible
+  table; every offset in it was wrong.
+- **A helper script shadowing a stdlib module.** A local file named `dis.py` captures any
+  `import dis` performed inside a third-party package. The symptom appears as a circular-import
+  error *inside that package*, which reads like a broken dependency rather than a local name clash.
+- **Measuring against an incomplete reference.** A "precision" number computed against a partial
+  listing reports the reference's gaps as your errors. Here it scored a working extractor at ~30%
+  when the reference itself was the incomplete side.
+
+**Why it is hard to see**
+The tool is trusted by default, because you wrote it for this exact job. Its output is well-formed
+and arrives fast, which reads as competence.
+
+**Do instead**
+- **Sanity-check the shape before the content.** A ratio or distribution that is implausible for the
+  domain is a bug signal -- e.g. an average of 31 references per offset when the rest of the picture
+  implies ~3.
+- **Cross-check against an independently built artifact.** Two independent producers agreeing to
+  ~99% is evidence; one producer's own output never is.
+- **Histogram before choosing a threshold, and re-measure after changing it.** If moving a knob does
+  not move the metric, the knob is not doing what you think (a run-length filter here barely changed
+  accuracy across a 10x range, which is how it was caught).
+- **Exercise any fallback path against a case whose answer is already known.** An accuracy claim
+  derived only from the tool's own output means nothing.
+- **Name helpers so they cannot shadow a module** (`dart_disasm.py`, not `dis.py`), and keep a
+  timeout on every scan (SKILL.md).

@@ -64,9 +64,11 @@ Establish layer ownership **before** investing in a patch direction.
 | Change a decision permanently | `libapp.so` | most direct, hardest to locate |
 | Change startup behaviour only | host native library constructor | survives runtime restarts |
 
-Editing `libapp.so` is the most durable but locating Dart AOT code is genuinely hard: strings are the
-most reliable entry, because Dart string objects and the code referencing them can be found by scanning
-the snapshot rather than by pattern-matching machine code.
+Editing `libapp.so` is the most durable but locating Dart AOT code is genuinely hard. This subject is
+large enough to have its own reference: **`references/dart-aot.md`** covers pinning the Dart version,
+building a decompiler for exactly that version, the object-pool model and how to index it, the register
+and boolean conventions, the three assembly signatures that identify most business logic, the locating
+workflow, and how to patch this layer safely.
 
 ## Locating logic without symbols
 
@@ -85,7 +87,11 @@ the snapshot rather than by pattern-matching machine code.
                     'utf-16le:', blob.find(phrase.encode('utf-16-le')))
   ```
 
-  Try both, and try a short distinctive substring rather than a long phrase.
+  Try both, and try a short distinctive substring rather than a long phrase. Which encoding applies
+  is predictable rather than random: in a Dart AOT snapshot ASCII literals are stored one-byte (a
+  UTF-8 search finds them) while CJK / non-Latin literals are UTF-16LE (a UTF-8 search returns zero).
+  `dart-aot.md` §7 gives the exact framing, and `scripts/dart_pool_strings.py --find` locates either
+  encoding by file offset.
 - **A phrase that is absent may simply never exist as one literal.** UI text is often assembled from
   fragments or templates, so "the whole sentence" can be missing while both halves are present.
   Search the shortest distinctive token, and expect the interesting anchor to be a *label* rather

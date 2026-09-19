@@ -87,6 +87,7 @@ Load only what the current step needs.
 | `references/recon.md` | Starting any new sample; identifying packer, SDKs, code location, ABI |
 | `references/packers.md` | The app is packed/hardened, or an edit makes it die before your code runs. Also load before discarding any route as "blocked by the shell" |
 | `references/framework-runtimes.md` | The UI is not native (Flutter / React Native / Unity / Cordova), or Java-layer hooks fire zero times while the UI clearly works |
+| `references/dart-aot.md` | The logic lives in a Dart AOT snapshot (`libapp.so`): pinning the Dart version, building a matching decompiler, the object pool and reference indexing, register/boolean conventions, locating and patching Dart code |
 | `references/native-and-so.md` | Patching in a `.so`, needing code to run before the app's own code, hand-built native payloads that crash inside the linker, or **deciding which library/ABI is actually loaded and executing** |
 | `references/ad-removal.md` | Task involves ads, trackers, sponsored cards, splash/interstitial/reward |
 | `references/membership-and-limits.md` | Task involves VIP, subscription, paid content, unlock, "fully cracked" |
@@ -113,6 +114,9 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/dex_strpatch.py` | Byte-level string constant patch with **string_ids ordering guard** |
 | `scripts/dex_classdiff.py` | Compare two dex class tables (set + access flags) to prove a patch was surgical |
 | `scripts/dex_strings.py` | Dump/extract strings and endpoints from dex without a decompiler |
+| `scripts/dart_pprefs.py` | Build/query the object-pool offset -> code-site index for a Dart AOT snapshot (arithmetic decode; seconds, not minutes) |
+| `scripts/dart_pool_strings.py` | Recover string literals from a Dart AOT snapshot: framed entries, the one-byte vs UTF-16 split, file offsets, and a run-length noise filter |
+| `scripts/dart_disasm.py` | Annotated windowed disassembly of Dart AOT code (pool + boolean annotations) plus a B/BL caller index |
 | `scripts/find_refs.py` | Count and list callers of a method/field (blast-radius check) |
 | `scripts/repack.py` | Rebuild APK with replaced dex, strip only signatures, sign |
 | `scripts/dexpatch/` | dexlib2 method-level surgical rewriter (the preferred patch tool) + build notes |
