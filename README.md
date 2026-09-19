@@ -13,13 +13,21 @@ directly.
 
 - Deciding **fast** whether a request is even achievable client-side, instead of
   burning hours on a paywall that is enforced by a server.
+- Deciding **what form the deliverable must take** before any work starts — an
+  unrooted, self-contained artifact is a different problem from "make it work on this
+  machine", and confusing the two is the most expensive drift in this domain.
 - Choosing the **safest patch layer** for a given change, and avoiding the layers that
   break the app.
 - Separating **your own mistakes from the app's or the server's problems** — a
   feature-scoped failure (login, registration, payment) is often a TLS/certificate issue on
-  one code path, not a consequence of the patch you just built.
+  one code path, not a consequence of the patch you just built. Device state, a dead device
+  server and clock drift masquerade the same way.
+- Establishing **which architecture and which library are actually executing**, rather
+  than trusting what the manifest ships or what the device claims.
 - Working through **packed/hardened targets**: identifying the packer, unpacking, and turning a
   memory dump back into a patched, installable APK.
+- Keeping a **long task honest**: a live record, graded conclusions, calibrated timeouts, and
+  bounded waits, so progress is not lost and the same mistake is not made twice.
 - Avoiding the specific mistakes that produce an APK that builds perfectly and dies at
   runtime.
 
@@ -31,10 +39,13 @@ references/               loaded on demand, one topic each
   recon.md                    identify packer, SDKs, code location, tamper checks; unpacking
   packers.md                  hardened targets: rejection signals, measuring the validation
                               boundary with single-variable tests, choosing a native host
-  framework-runtimes.md       Flutter / React Native / Unity: which layer owns the UI
+  framework-runtimes.md       Flutter / React Native / Unity: which layer owns the UI, and how to
+                              find logic when there are no symbols (string encoding traps)
   native-and-so.md            .so hosts, DT_NEEDED vs JNI_OnLoad, relocation limits,
-                              relocation-free bootstrapping, replacing Java methods natively
-  long-task-discipline.md     live record, conclusion grading, drift control, handover
+                              relocation-free bootstrapping, replacing Java methods natively,
+                              and which ABI/library is *actually loaded and executing*
+  long-task-discipline.md     live record, conclusion grading, drift control, timeout and
+                              wait calibration, deliverable-form drift, handover
   ad-removal.md               ad taxonomy, wrapper mapping, callback trap, global gates, verification
   membership-and-limits.md    server vs client authority; what is and is not patchable
   server-api.md               probe an app's API; prove who owns the gate
@@ -42,9 +53,11 @@ references/               loaded on demand, one topic each
   third-party-builds.md       auditing a "cracked"/"modded" APK before trusting it
   dex-patching.md             patch-layer table + dexlib2 technique in depth
   repack-and-sign.md          repack rules, unpack-and-repack, signing, post-install hazards
-  runtime-data.md             DataStore / SharedPreferences / SQLite / protobuf
+  runtime-data.md             DataStore / SharedPreferences / SQLite / protobuf; when the app
+                              rewrites your edit, and decoding a value that looks encrypted
   dynamic-frida.md            Frida setup, version pinning, the four-layer probe, hook strategy
-  environment.md              device/emulator setup, ADB, UI automation, offline devices, log signals
+  environment.md              device/emulator setup, root, ADB, offline devices, log signals,
+                              emulator console control and recovery, preflight, look-at-the-screen
   verification.md             the claim ladder; what "done" means
   pitfalls.md                 the failure catalogue -- read before building
 scripts/                  parameterized, path-agnostic
@@ -65,6 +78,15 @@ scripts/                  parameterized, path-agnostic
   frida_probe.js              four-layer runtime probe (app net layer + OkHttp + java.net + exceptions)
   run_probe.py                inject the probe, stream it to a log file, stay resident
   tls_check.py                strict certificate check for one or more hosts
+  preflight.py                environment check before every experiment block (device, root,
+                              ABI/translation, clock skew, leftover proxy/forwards, dead server)
+  lib_map.py                  what is *actually mapped* into a live process: per-library path,
+                              base, architecture, and whether it came from the APK or was
+                              materialized at runtime
+  blob_decode.py              search, don't guess, the framing of a stored value
+                              (base64/hex x rotation x deflate); re-encode the edited payload
+  snap.py                     bounded burst screenshots + control-tree capture with a stall
+                              detector, and a verdict on whether the tree is usable at all
 ```
 
 ## Install

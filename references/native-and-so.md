@@ -101,12 +101,82 @@ Stripped and obfuscated libraries still expose structure:
 
 ## Cross-architecture notes
 
-- **arm64** is the common case on modern devices; prefer it and make sure the host library you pick
-  actually exists for that ABI.
-- **x86_64** appears on emulators. Shells and payloads are ABI-specific: a file built for one ABI will
-  not be loaded on the other, and the failure mode looks like a missing library rather than a mismatch.
-- Keep your build artifacts per-ABI and label them. Mixing them is a common source of "it crashed for no
-  reason" when the same APK behaves differently on an emulator versus a device.
+Architecture is not background information here — it decides **which artifact you must edit** and
+**whether your hook can observe anything at all**. Get it from the runtime, not from the manifest.
+
+### What the device claims vs what is executing
+
+Three different answers, and they disagree more often than people expect:
+
+| Source | Answers | Command |
+|---|---|---|
+| The device | which ABIs the system supports | `getprop ro.product.cpu.abi` and `ro.product.cpu.abilist` |
+| The package manager | **which ABI it chose for this app on this device** | `dumpsys package <pkg> \| grep primaryCpuAbi` |
+| The live process | **what is actually mapped right now** | `scripts/lib_map.py --pkg <pkg>` |
+
+Only the third is ground truth. The first two are predictions, and they are wrong exactly when it
+matters: an emulator whose primary ABI is `x86_64` can be running an `arm64-v8a`-only app through a
+translator, and a fat APK can have the package manager pick an ABI you did not assume.
+
+**Consequence: if the library you patched does not appear in the live mapping, your change cannot
+matter.** That is a plan problem, and no amount of re-patching will fix it.
+
+### Translation layers change what you are observing
+
+When an ARM-only app runs on an x86 host, a translator (Intel Houdini, `libndk_translation`, a
+`native_bridge` in general) is executing the guest code. Detect it from the maps — look for
+translator marker libraries and for app libraries whose architecture differs from the host's
+primary ABI (`lib_map.py` reports both).
+
+What it changes:
+
+- **Timing.** Translation is slower and less predictable. Anything you measured about latency is
+  about the translator, not the code.
+- **Native integrity and anti-tamper checks can behave differently** under translation, in either
+  direction — a check that fails on hardware may pass here, and vice versa. A pass under translation
+  is not evidence of a pass on hardware.
+- **Hook behaviour.** Intercepting translated code is not the same as intercepting native code:
+  address spaces, calling conventions, and what the host sees at a syscall boundary all differ. If a
+  native hook reports nothing while the feature plainly runs, suspect translation before suspecting
+  your script.
+- **Syscall-level observation shows the host's view.** A file or network call made from the guest
+  may look different on the host side than it would natively.
+
+**Rule: verify the artifact on the ABI the user will actually run.** An emulator-only result is a
+mid-task checkpoint, never the final claim (`verification.md`).
+
+### Fat APKs: patching the ABI that never loads
+
+An APK can ship `lib/arm64-v8a/`, `lib/armeabi-v7a/`, `lib/x86_64/`… The package manager extracts
+**one** of them into the install-time native library directory, and only that one is loaded.
+
+- Check `primaryCpuAbi` and the live maps before editing a `.so`. Editing `arm64-v8a` while the
+  device loads `armeabi-v7a` produces a build that is byte-different and behaviorally identical.
+- If the deliverable must work for an unknown user, remember their device may select a different
+  ABI than yours. Either patch every ABI present, or state which ABI your artifact targets.
+- If the app's own libraries are written at *runtime* rather than extracted from the APK, the live
+  paths will not be inside the APK at all (`lib_map.py` marks these `materialized`). Those belong to
+  whatever produced them, and a repacked APK will not carry them in that location.
+
+### Payloads and tooling are per-ABI too
+
+- A native payload, an injected library, or a shellcode blob built for one ABI **will not load** on
+  another. The failure usually surfaces as a *missing library* or a generic linker error rather than
+  a clean "wrong architecture" message — do not read it as "my payload is broken".
+- **Pointer size differs** between 32- and 64-bit targets. A script or struct layout that assumes
+  8-byte words misbehaves silently on a 32-bit target.
+- Keep build artifacts per-ABI and label them with the ABI in the filename. Mixing them up is a
+  reliable source of "it crashed for no reason" when the same APK behaves differently on an emulator
+  and on a device.
+
+### Quick decision list
+
+1. `scripts/lib_map.py --pkg <pkg> --app-only` → which app libraries are loaded, from where, and at
+   what architecture.
+2. If a translator is present and the task needs reliable native behaviour, move to a matching
+   device.
+3. If the library you meant to patch is absent, stop — pick the right library first.
+4. Only then start editing.
 
 ## Verification
 

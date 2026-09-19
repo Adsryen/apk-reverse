@@ -83,6 +83,116 @@ Do these cheaply, and only when they can change a decision — not as ceremony.
 - **When resuming**: read the record first, and treat anything not in it as unknown, even if it feels
   familiar.
 
+## The most expensive drift: solving it in an environment the deliverable will never see
+
+There is one drift in this domain that costs more than all the others, because it produces a
+result that looks like success and is not one.
+
+**A runtime-only result is easy to obtain and easy to mistake for a finished artifact.**
+
+Editing a data file, hooking a live process, blocking a hostname, holding a proxy open — each of
+these can make the app behave correctly *on the machine where you did it*, with no repackaging
+required. It is often the fastest path to a visible win. It is also frequently **not the
+deliverable at all**, because the requirement was never "make it work here".
+
+The constraint axes that decide this — check every one against the original request, and write
+down the answer as a testable sentence before you start:
+
+| Axis | The question | Why it silently invalidates work |
+|---|---|---|
+| **Privilege** | must it run **unrooted**? | a rooted-only result cannot be given to a normal user at all |
+| **Modification form** | must it be a **rebuilt/installable artifact**, or is a live-instrumentation result acceptable? | hooks and data edits do not ship inside an APK |
+| **ABI / device class** | which ABI, which device family? | an emulator-only or x86-only result is not evidence for a physical ARM device |
+| **Network** | must it work **online**? | a fix that depends on being offline or on a host proxy fails the moment it is used normally |
+| **Persistence** | must it survive restart, upgrade, and a fresh install? | in-memory and session-scoped state evaporates |
+| **Distribution** | does the *shipped file* have to be self-contained? | anything that needs a helper on the machine is not a shippable artifact |
+
+**Checkpoint question, asked at the same moments as the drift checks above:**
+
+> *If I handed over exactly what exists right now, would it satisfy the constraint sentence I wrote
+> at the start?*
+
+If the answer is no, you have made real progress on a **component**, and that is worth stating as
+such — but it is not the task. Do not let "it works" stand in for "it works under the constraint".
+
+**What to do instead of over-claiming.** Split the result into two explicitly labelled parts:
+
+1. **What is achievable inside the constraint**, and how far along it is.
+2. **The unconstrained workaround** (needs root / needs a host / needs a proxy), stated as a
+   deliberate fallback, with its requirements made obvious to the reader.
+
+A privileged workaround is genuinely useful — it can be the difference between using the app and
+not. It becomes a problem only when it is presented as the deliverable. Report it as a fallback,
+keep the constrained goal open, and say plainly which one you have.
+
+**Also watch the inverse**: if the constraint is "must be a rebuilt artifact", do not let a working
+runtime result quietly close the investigation. Use it for what it is good for — it proves the
+mechanism and identifies the exact code or data to change — then port that finding into the
+artifact. The runtime result is the map, not the destination.
+
+## Bound every wait
+
+A long task stalls in ways that produce no information and consume the most valuable resource you
+have: wall-clock time and the next person's patience. Three habits prevent almost all of it.
+
+**1. Every command has a timeout, and its absence is the bug.** A helper that shells out without a
+timeout can hang forever, and the failure presents as "the task stopped making progress" rather
+than "this call blocked". Pass an explicit timeout on every subprocess, every HTTP request, every
+device call. When one expires, the result is **unknown**, not failed — record it that way and
+re-check state before retrying.
+
+**2. Calibrate the expected duration from measurement, not from a guess.** A timeout only means
+something if it is set relative to how long the operation *should* take, because that is what makes
+"slow" and "hung" distinguishable. Guessed budgets are either so short that healthy work gets killed,
+or so long that a stall looks like patience.
+
+So: **measure once, write it down, then derive the bound.**
+
+| Operation class | How to bound it |
+|---|---|
+| host-side tool (`baksmali`, `apksigner`, a compiler) | seconds to low minutes; time it once, then set roughly 3–5× observed |
+| device shell call (`adb shell …`) | seconds — **except** the first `su` after a reboot, which can prompt and block |
+| install / push of a large artifact | minutes; scales with size, not with the app's complexity |
+| app cold start to first frame | tens of seconds — **longer with a packer**, which does real work before your code runs |
+| a step needing a human or an external service | **unbounded in principle** — do not wait at all (see P22) |
+| waiting for an on-screen state change | bound it *and* sample it (point 3) |
+
+Record the observed durations in the live record. They are exactly the kind of mechanical fact that
+gets re-derived painfully after a context loss, and having them turns a later timeout into an
+interpretable signal instead of a mystery.
+
+**Exceeding the expected window is itself the finding.** It tells you something about state — the
+device is wedged, the app never reached that phase, the action never happened — and that is a
+different investigation from waiting longer. Re-check state instead of extending the deadline.
+
+**3. Every wait has a deadline, an observable to sample, and a look.** "Wait for the operation to
+finish" is not a plan. Name the observable, how often you will sample it, how long you will sample
+before giving up, and what you conclude on expiry:
+
+```
+waiting for: <observable>          e.g. the overlay is gone / the counter incremented
+sample:      <interval + how>      e.g. every 15 s: screenshot + current window focus
+give up at:  <deadline>            e.g. 150 s
+on expiry:   <what I conclude>     e.g. "did not complete within the window" -- not "cannot work"
+```
+
+**Sample with your eyes rather than sleeping blind.** When the step is gated on something visible — a
+screen, a dialog, a progress indicator — capture it and **look at it** instead of sleeping through the
+interval. A fixed sleep either wastes time or measures the wrong instant; a look tells you what
+actually happened, and byte-identical consecutive samples tell you nothing is going to change
+(`environment.md` §look at the screen). This is the cheapest way to avoid spending rounds on a state
+that was never going to arrive.
+
+Three rules that follow:
+
+- **A deadline that passes is a measurement, not a verdict.** "Still not finished after N seconds"
+  tells you about latency and reliability. It does not tell you the approach is impossible, and
+  writing it down as impossible is how a viable route gets discarded.
+- **Never busy-poll a long job while you have independent work.** Start it, do the other thing, and
+  collect it when it settles. Polling wastes the same resource the task is already spending.
+- **Prefer a bounded observable over a fixed sleep.** Poll the state you actually care about, with a
+  cap — and prefer a sample you can inspect over a duration you hope is right.
+
 ## Handover
 
 A handover is the record plus three things, written for someone with **no** memory of the task:

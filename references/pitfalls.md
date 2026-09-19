@@ -493,3 +493,113 @@ an impression of work being done.
 - Detect stalls by change, not by elapsed time: if N consecutive samples are identical, break out.
 - Prefer driving the prompt to completion over waiting it out — the same prompt usually recurs, so
   automating it once pays back immediately.
+
+---
+
+## P23. The fix lives in a file the app rewrites
+
+**Symptom**
+You change a value in the app's data, the write succeeds, the file reads back correctly — and after
+the next launch the value is back to what it was. Often byte for byte identical, which makes it look
+like nothing happened at all.
+
+**Root cause**
+The stored value is a **cache, not a source of truth**. Either the app re-fetches it and re-persists
+it, or it rewrites the file from its own defaults on every start. Your edit was never authoritative.
+
+Compounding it: the intuitive way to protect the file — a restrictive mode or a changed owner — **does
+not work**, because the app does not open-and-write the existing file. It **deletes the file and
+creates a new one**, and a new file is created with the app's own mode and owner. Nothing is inherited,
+so `chmod`/`chown` are silently ineffective.
+
+**Why it is hard to see**
+Verification is usually done immediately after writing, while the file is still correct. The rewrite
+only happens on the next start, which is one step further along than you looked. And the "fix" that
+seems obviously right (tighten permissions) fails without any error.
+
+**Do instead**
+- **Verify after a relaunch, not after the write.** The write succeeding is not the finding; surviving
+  a restart is.
+- **Distinguish the two causes with one offline launch.** If the value survives with the network down,
+  it came from the server. If it does not, the app is regenerating it locally — and then a data edit is
+  the wrong layer entirely; patch the read path instead.
+- To make a data edit stick, use the **immutable attribute** and confirm it took effect:
+  ```bash
+  su -c "chattr +i <file>"; su -c "lsattr <file>"     # expect the 'i' flag
+  ```
+  It is enforced by the filesystem against the delete itself, which is why it holds where permissions
+  do not. Undo with `chattr -i`.
+- Then **exercise the feature**, not just the value. A blocked write the app depends on can make it
+  misbehave; "the file still has my value" is not "the app still works".
+- Remember a lock is **device state, not artifact state** — it does not travel with an APK. Record it
+  as an environment requirement. The only form that ships is a code patch (`runtime-data.md`).
+
+---
+
+## P24. The artifact changed, but the wrong one is executing
+
+**Symptom**
+The build differs from the original, the pipeline reports success, the file on disk is genuinely
+modified — and the app behaves exactly as before. Or a native hook reports nothing while the feature
+plainly runs.
+
+**Root cause**
+Something other than your edit is being used at runtime:
+
+- **Wrong ABI.** A fat APK ships several `lib/<abi>/` directories; the package manager extracts and
+  loads **one**. Editing `arm64-v8a` while the device loads `armeabi-v7a` produces a byte-different,
+  behaviorally identical build.
+- **The library is not from the APK at all.** Some libraries are written into the app's data directory
+  at runtime rather than extracted from the package. Patching the APK copy changes a file nobody loads.
+- **Multiple processes.** The work was done in, or the check lives in, a different process than the one
+  you are observing.
+- **A stale install.** The package manager reported success for a request that did not replace what is
+  on disk (`P18`).
+
+**Why it is hard to see**
+Every local indicator agrees: the diff is non-empty, the build is signed, the install returned success.
+Nothing in the *build* pipeline can detect this, because the build is fine. The contradiction only
+exists at runtime.
+
+**Do instead**
+- **Ask the running process what it loaded**, before editing: `scripts/lib_map.py --pkg <pkg>`.
+  Libraries whose path is not under the installed APK's lib directory were materialized at runtime
+  and belong to whatever produced them.
+- Confirm the ABI the package manager actually chose (`dumpsys package <pkg> | grep primaryCpuAbi`)
+  rather than the one you assumed from the manifest.
+- **If the library you patched is not in the live mapping, stop.** No amount of re-patching helps; the
+  plan is wrong.
+- Treat a behaviorally identical rebuild as **positive evidence that your edit is not being loaded**,
+  not as "the change had no effect". Those are different conclusions and only one of them is actionable.
+
+---
+
+## P25. "The search found nothing" treated as "the data is not there"
+
+**Symptom**
+You scan an artifact for a known-present value — a UI label, a marker string, an endpoint — get zero
+hits, and conclude the content is stripped, encrypted, or otherwise unavailable. A route gets written
+off on that basis.
+
+**Root cause**
+The search used the wrong representation. A byte scan for UTF-8 text returns nothing against content
+that is stored as UTF-16, or compressed, or framed inside a container, or split across fragments. The
+data is present; the needle was encoded differently from the haystack.
+
+**Why it is hard to see**
+"Zero results" is a clean, confident-looking output. It feels like a measurement, so it gets recorded
+as a finding, and findings propagate into the plan.
+
+**Do instead**
+- **Before concluding absence, search more than one encoding.** UTF-8 and UTF-16LE will between them
+  cover most text storage:
+  ```python
+  blob.find(needle.encode('utf-8')), blob.find(needle.encode('utf-16-le'))
+  ```
+- **Search the shortest distinctive fragment.** Text is often assembled from pieces or templates, so a
+  full sentence can be absent while its parts are present.
+- **Try the value without its framing.** A hit rate of zero is also the expected result for content
+  that is inside a compressed or encoded container — decode the container first (`runtime-data.md`,
+  `scripts/blob_decode.py`).
+- **State a negative result with its scope**: "no UTF-8 or UTF-16LE literal match in this artifact"
+  is a finding. "The string does not exist" is a guess wearing a finding's clothes.

@@ -72,11 +72,37 @@ the snapshot rather than by pattern-matching machine code.
 
 - **Strings first.** User-visible text (dialog bodies, feature labels) is the cheapest anchor in any
   runtime. Find it, then find what references it.
+- **Search them in the encoding the runtime actually uses, or you will conclude they do not exist.**
+  This is the single most common false negative in cross-platform work. A runtime snapshot does not
+  necessarily store text as UTF-8; UTF-16 (little-endian on these targets) is common and entirely
+  valid. A UTF-8 search of such a snapshot returns **zero hits**, which reads as "the strings were
+  stripped / encrypted, this route is dead" — and that conclusion is wrong.
+
+  ```python
+  blob = open('libapp.so', 'rb').read()          # or whichever artifact holds the snapshot
+  for phrase in ('<feature label>', '<dialog title>'):
+      print(phrase, 'utf-8:', blob.find(phrase.encode('utf-8')),
+                    'utf-16le:', blob.find(phrase.encode('utf-16-le')))
+  ```
+
+  Try both, and try a short distinctive substring rather than a long phrase.
+- **A phrase that is absent may simply never exist as one literal.** UI text is often assembled from
+  fragments or templates, so "the whole sentence" can be missing while both halves are present.
+  Search the shortest distinctive token, and expect the interesting anchor to be a *label* rather
+  than a sentence.
+- **Landing on a string tells you where the text lives, not which code decided to show it.** Treat the
+  hit as an anchor for reference-hunting, not as the answer.
 - **Compare two builds.** The same feature in a slightly different version often reveals the code path.
 - **Watch the boundary, not the interior.** For cross-platform apps it is usually far cheaper to observe
   what crosses between layers than to reverse the interior of the runtime.
 - **Do not assume the obfuscated names are stable or meaningful.** They are not, and treating them as
   identities leads to conclusions that break on the next build.
+- **Obfuscated identifiers can be non-ASCII and invisible.** Renaming passes can replace class and
+  member names with characters outside ASCII (combining marks, variant selectors and similar). If a
+  class exists at runtime but "cannot be found" by the name you read from a decompiler, suspect
+  encoding or normalisation in your tooling rather than a missing class. Resolve such members by
+  **shape** — parameter counts, types, interface implementation — instead of by name, and prefer
+  runtime enumeration of loaded classes over guessing identifiers.
 
 ## What this changes about your plan
 

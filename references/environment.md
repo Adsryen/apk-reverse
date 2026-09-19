@@ -65,11 +65,86 @@ Notes:
 - Some SDKs bypass the system proxy entirely (many ad SDKs do). Proxy logs therefore **undercount** traffic — do not conclude "no ad traffic" from proxy logs alone; confirm with a runtime DNS hook.
 - Clean up when done: `settings put global http_proxy :0`.
 
+## Preflight — run this before every experiment block
+
+`scripts/preflight.py` checks, read-only, everything that silently fakes a failure: device
+reachability, whether more than one device is attached without an explicit serial, root, the
+runtime translation layer, device/host clock drift, a leftover device-wide proxy setting, stale
+port forwards, a dead device server, the ABI the package manager actually chose, and the free
+space left for installs.
+
+```bash
+python scripts/preflight.py --pkg <app.package> --expect-root
+python scripts/preflight.py --cleanup      # also clears a leftover proxy and stale forwards
+```
+
+**The rule it exists to enforce:** *do not attribute a failure to your patch while preflight is
+dirty.* A surprising fraction of "my change broke it" is a device that was already in a bad state.
+Costing thirty seconds here is cheaper than costing several rounds to a wrong conclusion, and the
+wrong conclusion is the one that gets written down and trusted later.
+
 ## Emulator notes
 
-- Verify the app can install at all. INSTALL failures on emulators are common (ABI, min SDK, vendor checks) and are usually not related to your patch.
-- Snapshot/rollback is the main advantage — use it to A/B two builds quickly.
-- Never quote emulator behavior as proof for a device-only question (and vice versa).
+Emulators are the right place to iterate and the wrong place to conclude.
+
+- **Verify the app can install at all.** INSTALL failures on emulators are common (ABI, min SDK,
+  vendor checks, a stale copy with a different signature) and are usually **not** related to your
+  patch. Get a clean install of the *unmodified* build working before you change anything.
+- **Snapshot/rollback is the main advantage** — use it to A/B two builds quickly, and to get back
+  to a known-good state after a destructive experiment.
+- **Never quote emulator behavior as proof for a device-only question** (and vice versa). An
+  emulator that runs the app is not evidence about a physical ARM device.
+- **Most vendors ship a console binary that is far more reliable than the GUI.** Learn yours early;
+  it is what you will need when the GUI is unresponsive and adb is already down.
+
+  | Vendor | Typical console binary | Useful verbs |
+  |---|---|---|
+  | LDPlayer | `dnconsole.exe` (next to the player exe) | `list2`, `launch --index N`, `reboot --index N`, `quitall` |
+  | MuMu | `MuMuManager.exe` | `info -v all`, `control -v N launch`, `control -v N shutdown` |
+  | AVD / Android Emulator | `emulator.exe` | `-list-avds`, `@<avd>`, `-no-window` |
+  | Genymotion | `gmtool` | `admin list`, `admin start` |
+
+- **Recovery order when `adb devices` goes empty.** Do these in order; the first two are the ones
+  people skip:
+
+  1. `adb kill-server && adb start-server` — clears a wedged host daemon.
+  2. Re-run `adb devices`. If still empty, check whether the **emulator process is actually alive**
+     (`tasklist` / `ps`). A running process with **no listening port** means the VM never finished
+     booting its adb bridge — restarting the *device* is the only fix.
+  3. Restart the instance through the vendor console (`reboot --index N`). Restarting via the
+     player binary's "launch" verb frequently leaves you with a process and still no adb.
+  4. Only then consider that something is wrong with the host.
+
+  Symptom worth memorising: **the emulator process exists but nothing is listening on the adb
+  port.** Distinguishing "not running" from "running but not booted" is what makes step 2 worth
+  doing — they have different fixes and only one of them needs the GUI.
+
+- **Root is a per-vendor setting, not a given.** Most emulators expose it as a toggle in their
+  settings ("root permission" / "ROOT 权限"); some ship a separate rooted image. Always verify
+  rather than assume:
+
+  ```bash
+  adb -s <serial> shell "su -c id"     # want: uid=0(root)
+  ```
+
+  A rooted emulator is usually the fastest environment for everything in this skill, which makes it
+  easy to forget that it is also the *least representative* one.
+
+- **Running two instances.** Different serials make two emulators genuinely disjoint, which is
+  useful for holding a clean control (original build, untouched state) alongside your workbench.
+  Keep them labelled, always pass `--serial`, and **do not run the same experiment on both** — the
+  value of a second device is independence, and duplicating work destroys it. Operate one at a
+  time; the other is a reference point, not extra throughput.
+
+- **Apps can detect the emulator** and change behaviour or refuse to run. If the app behaves
+  differently here than on hardware, that is a finding about the emulator, not about the app. Note
+  it and move the question to a real device.
+
+## Which architecture is actually executing
+
+Device selection and architecture are the same question. `getprop ro.product.cpu.abi` reports what
+the device claims; it does **not** report what is executing. Read `native-and-so.md` §Cross-architecture
+before you choose which library to patch, and `scripts/lib_map.py` to see the live truth.
 
 ## Install / reinstall
 
@@ -110,15 +185,64 @@ If the control still does not react, bypass the UI path entirely — `am start -
 
 `input text` additionally mangles or drops non-ASCII input. For CJK text, either install an ADB-driven helper IME or set the field from a runtime call rather than typing.
 
-### Screen evidence without pixels
+### Look at the screen — do not drive and wait blind
 
-`screencap` returns a 0-byte file on some ROMs. First try writing on-device and pulling:
+The most expensive habit in device work is: tap a coordinate, sleep, tap again, sleep, conclude
+something about the app. A screen that is *looked at* answers in one step what coordinate-guessing
+cannot answer in five — the layout shifted, a different dialog came up, a countdown is frozen, the
+button is disabled, the text on screen says exactly why.
+
+**Treat a look as a routine step, not a debugging last resort.** Capture:
+
+- **immediately before** anything time-dependent, so you know the starting state;
+- **during** a wait, at intervals — state changes are the information, and a single sample at the end
+  cannot distinguish "it progressed" from "it never moved";
+- **at every decision point**, before choosing the next action;
+- **on any surprise**, before forming a theory about it.
+
+`scripts/snap.py` does this with sane bounds, and tells you which kind of evidence you actually got:
+
+```bash
+python scripts/snap.py --out shots --tag before
+python scripts/snap.py --out shots --tag waiting --count 6 --interval 3
+```
+
+**Use the stall detector.** If consecutive samples are byte-identical, nothing is happening and more
+waiting cannot help. Stop, and go find out why — that is a different investigation from waiting
+longer.
+
+### Two kinds of screen evidence, and which one is trustworthy here
+
+| Evidence | What it gives you | When it is the right one |
+|---|---|---|
+| **the image** | exactly what is rendered: layout, which dialog, disabled states, drawn text | always available; the **only** evidence for runtime-drawn UI |
+| **the control tree** (`uiautomator dump`) | precise `bounds`, exact text, diffable | only when it actually has content |
+
+The tree is more convenient *when it exists* — it gives you tap coordinates and text you can diff. But
+**verify it has content before planning around it**:
+
+```bash
+adb -s <serial> shell "su -c 'uiautomator dump /sdcard/ui.xml'"
+adb -s <serial> pull /sdcard/ui.xml
+grep -c '<node' ui.xml          # 0 nodes -> the tree is useless for this screen
+```
+
+**A runtime-rendered UI frequently exposes no real controls at all.** Cross-platform runtimes, web
+views and canvas-drawn surfaces often produce an empty (or text-free) tree, which is why a plan built
+on "read the bounds out of the XML" stalls on exactly those apps — and also why tapping a control that
+"should be there" silently does nothing. When the tree is empty, the image is the **primary** evidence,
+not a fallback, and you read it directly rather than trying to derive coordinates from a tree that does
+not exist.
+
+`screencap` itself returns a 0-byte file on some ROMs. Write on-device and pull instead:
 
 ```bash
 adb -s <serial> shell "su -c 'screencap -p /sdcard/x.png'" && adb -s <serial> pull /sdcard/x.png
 ```
 
-If that is also empty, do not fight it: `uiautomator dump`'s XML is **better** evidence — text, diffable, and it records the real control tree and its contents. (If the dump fails with `could not get idle state`, retry once; a paused animation is usually the cause.)
+If that is also empty, do not fight it — but note that **a 0-byte capture is not evidence the screen is
+blank** (`pitfalls.md` P20). And if `uiautomator dump` fails with `could not get idle state`, retry once;
+a paused animation is usually the cause.
 
 ### Verify form input by reading it back
 

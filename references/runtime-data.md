@@ -105,8 +105,85 @@ If the effect must ship inside an APK, move it into code. Patterns, in order of 
 
 Reference case: a promo popup was gated by `<key>_expires_at`. Writing a large value via DataStore suppressed it on the test device, but a fresh install lost it. The durable fix replaced the dedicated map-lambda that produces the value so it always yields a far-future timestamp — a single-purpose class, safe to patch, no effect on the shared serialization helpers.
 
+## When the app rewrites your edit
+
+A very common sequence: you change the value, relaunch, and the value is **back** — often byte for
+byte identical to what it was before. That is not a failed write. It is the app re-establishing the
+value from a source of truth you have not touched yet.
+
+Two causes look identical and need different fixes:
+
+| Cause | How to tell | Fix |
+|---|---|---|
+| The app **re-fetches from the server** and re-persists | take the app offline and relaunch: does your value survive? | lock the file, block the refresh request, or move the change into code |
+| The app **rewrites the file on every start** from its own defaults | your value does not survive even with the network down | the value is not authoritative — patch the read path instead |
+
+Do the offline test first. It costs one launch and separates the two cases.
+
+### Making a data edit stick (in order of durability)
+
+1. **Immutable file attribute** — the reliable, reversible way to stop a rewrite:
+   ```bash
+   su -c "chattr +i <path/to/prefs.xml>"
+   su -c "lsattr <path/to/prefs.xml>"      # expect the 'i' flag, e.g. -----i-------
+   # to undo:
+   su -c "chattr -i <path/to/prefs.xml>"
+   ```
+   Verify with `lsattr`, not by assuming the command worked.
+
+   **Why permissions do not achieve this.** Tightening the mode or changing the owner looks like the
+   obvious move and does not work, because the app does not open-and-write the existing file — it
+   **deletes the file and creates a new one**. The new file is created by the app, with the app's own
+   mode and owner, so a restrictive `chmod` or a `chown root` is simply not inherited. The immutable
+   attribute is enforced by the filesystem against the delete itself, which is why it holds.
+
+2. **Keep the app offline** so the refresh source is unreachable. Effective for a test, and
+   sometimes acceptable in use — but be explicit about it, because a fix that only works offline
+   fails the "works under normal conditions" constraint. See the deliverable-drift section in
+   `long-task-discipline.md` before presenting this as a result.
+
+3. **Block the refresh request** at the runtime or network layer — durable while your instrumentation
+   is running, and requires you to have identified the endpoint (`references/server-api.md`).
+
+4. **Move the change into code** — patch the read path or the decision. This is the only form that
+   ships inside an APK (`§Making the fix durable` above).
+
+### Two cautions about locking
+
+- **Verify the feature, not the value.** Blocking a write the app depends on can make it misbehave
+  or fail loudly. After locking, exercise the feature you care about — "the file still has my value"
+  is not the same as "the app still works".
+- **A lock is device state; it does not travel with an APK.** If the recipe requires it, record it as
+  an environment requirement, so nobody later mistakes it for something baked into the artifact.
+
+## Encoded values: do not assume "encrypted"
+
+Preference values that carry server configuration are frequently stored as a single opaque string
+rather than readable XML. Before concluding the value is encrypted, check whether it is merely
+**framed**: a common shape is `base64( rotate( deflate( json ) ) )`, where the cyclic rotation exists
+precisely so a naive decode fails.
+
+`scripts/blob_decode.py` searches the parameter space instead of guessing it — outer encoding
+(base64 / base64url / hex), rotation offset, and compression type — and reports every combination
+that yields a structured document, plus the exact parameters to re-encode your edited payload:
+
+```bash
+# pull the value straight out of a preferences XML and decode it
+python scripts/blob_decode.py --prefs-xml prefs.xml --name <key>      # (see --help for exact name)
+
+# after editing the decoded payload, rebuild the value with the winning parameters
+python scripts/blob_decode.py --encode --file decoded.bin --outer base64 --inner raw --cut <N>
+```
+
+The rotation search is cheap — a few tens of thousands of candidates resolve in well under a second
+— so there is no reason to guess. **Distinguish framing from real encryption before spending time
+on a key:** a framed blob becomes structured the moment you remove the framing, whereas a keyed blob
+stays random-looking. If it stays random, treat it as opaque and move to the code path that consumes
+it.
+
 ## Cautions
 
-- Editing data while the app is running is unreliable: in-memory caches win.
-- The server may overwrite your value on next sync. If the app re-fetches and re-persists the authoritative value, a data edit is temporary by design — which is exactly why the durable version belongs in code.
+- Editing data while the app is running is unreliable: in-memory caches win. Force-stop, edit, then launch.
+- The server may overwrite your value on next sync — see *When the app rewrites your edit* above.
 - Do not edit a token you do not own and expect it to be accepted; tokens are validated server-side (`references/server-api.md`).
+- A restored data directory needs ownership fixed again after every reinstall, because the uid increments.
