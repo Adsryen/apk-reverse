@@ -13,6 +13,36 @@ Three rules override everything else in this skill:
 2. **Never ship an unverified APK.** "It assembles" is not "it works". Install it, launch it, exercise the feature you changed, on a real device or a close emulator.
 3. **Know which layer owns the behavior before you patch.** Ads, paywalls, and feature gates live in different places. Patching the wrong layer either does nothing or breaks the app. Classify first (see step 2 below), patch second.
 
+## Symptom index — look here before you debug from first principles
+
+You arrived at a symptom, not at a file name. This table maps what you are *seeing* to the file that
+has already paid for that lesson. Skim it whenever something fails in a way the current plan does not
+explain; the cost of one lookup is minutes, and every entry below cost someone hours.
+
+| What you observe | Load first |
+|---|---|
+| A repackaged/re-signed build **dies before your code runs**; `SIGSEGV`, all registers zero, `pc=0`, `fault addr` near `0x0` | `native-tamper-and-suicide.md` (deliberate crash), then `code-virtualization-and-custom-linkers.md` |
+| **No packer** (Application is the app's own, dex readable) **and it still dies** | `code-virtualization-and-custom-linkers.md` |
+| Log says a **Java-layer** signature/integrity check **passed**, yet the process dies | `code-virtualization-and-custom-linkers.md` §a Java-layer signature killer is a decoy |
+| Deleting a library fixes validation but yields `UnsatisfiedLinkError: dlopen failed: library "X" not found` | `code-virtualization-and-custom-linkers.md` §the deadlock |
+| Whole classes appear as bare `native` declarations with no body | `code-virtualization-and-custom-linkers.md` |
+| A library's **SONAME does not match its filename** | `code-virtualization-and-custom-linkers.md`, `native-and-so.md` |
+| Your edit had **no effect at all**, with no error | `packers.md` §map the validation boundary |
+| Process **hangs** with no crash record, or dies to a `uid 0` killer | `native-tamper-and-suicide.md` §the rule (you probably made a terminate path *not return*) |
+| Death looks like an ordinary null dereference in a hardened library | `native-tamper-and-suicide.md` §deliberate-crash stubs |
+| The app dies **only while you are attached/rooted** | `detection-and-anti-analysis.md`; run the unmodified original under identical conditions first |
+| An install "succeeded" but nothing changed, or the version did not move | `long-task-discipline.md` §keep the observation window clean |
+| Evidence contradicts itself, or a capture looks like two states mixed | `long-task-discipline.md` §keep the observation window clean |
+| A script will not start, or a tool "is missing" | `scripts/doctor.py`, then `toolchain.md` |
+| Feature-scoped network failure (login/register/pay) while the rest works | `tls-and-cert.md` — do not assume your patch caused it |
+| Everything works but **every signed request fails** after repack | `signature-derived-keys.md` |
+| Ads still appear after a patch that should have killed them | `ad-removal.md` §step 4 (count the SDK's own log lines; n -> 0, not "I did not see it") |
+| A forced-update or "must update" gate blocks the build | `updates-and-forced-upgrade.md` §step 6 |
+| The dialog is gone but the feature is still locked | `membership-and-limits.md` / `account-gates.md` — decide server vs client authority before patching again |
+| You are about to discard a route as "blocked" | `packers.md` — re-read it before writing any route off; mis-attributed failures have removed viable routes for hours |
+| The task has run long and you are unsure what is already proven | `long-task-discipline.md` §keep a live record |
+
+
 ## Start here: classify the target in thirteen questions
 
 Answer these before touching a tool. Every one of them changes the whole plan.
