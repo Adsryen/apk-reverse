@@ -1,7 +1,7 @@
 # build artifacts
 *.class
 *.jar
-!scripts/dexpatch/*.java
+!skills/apk-reverse/scripts/dexpatch/*.java
 
 # working data -- never commit samples or outputs
 *.apk
@@ -21,6 +21,11 @@
 _tmp/
 out/
 work/
+audit_out/
+
+# sandbox installs made while testing `npx skills add .` against this repo
+.claude/
+.agents/
 *.log
 *.jsonl
 *.pcap
