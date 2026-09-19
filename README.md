@@ -117,7 +117,10 @@ references/               loaded on demand, one topic each
                               find logic when there are no symbols (string encoding traps)
   dart-aot.md                 Dart AOT in depth: version pinning and building a matching decompiler,
                               the object pool and reference indexes, register/boolean conventions,
-                              the three signatures that identify business logic, locating, patching
+                              the three signatures that identify business logic, locating, patching.
+                              Begins with the snapshot-decoding front end it depends on (aotopsy or
+                              blutter) because the pool listing is an input, not something this skill
+                              produces itself
   native-and-so.md            .so hosts, DT_NEEDED vs JNI_OnLoad, relocation limits,
                               relocation-free bootstrapping, replacing Java methods natively,
                               and which ABI/library is *actually loaded and executing*
@@ -318,6 +321,17 @@ React Native/Hermes bytecode internals, and defeating a server-side authority ar
 covered, and the skill is written to say so and stop rather than apply the nearest
 documented procedure to a target it was not written for.
 
+Two qualifications that the Coverage section states in full and that belong here too:
+
+- **Flutter/Dart AOT analysis has a dependency.** The workflow begins at a pool listing
+  (`pp.txt`-class output). Producing that needs a snapshot-decoding decompiler — aotopsy (a static
+  binary, no toolchain) or blutter (built from source, ~80 s) — and this repository does not contain
+  one. It is named as a prerequisite rather than left implicit.
+- **Not every claim in this repository has a run behind it.** `docs/verification-jiongnew/` records
+  what was actually measured, on which target, and with which independent cross-check; anything not
+  covered there is documented from experience and should be read as *inferred*, per this skill's own
+  claim ladder.
+
 ## Repository maintenance
 
 Three tools live at the root and are not part of the installed skill:
@@ -329,3 +343,9 @@ check_refs.py      every cross-reference that names a section of another
                    document reaches a real heading in that document
 build_scripts.py   audit for machine-specific leftovers (absolute paths, credentials)
 ```
+
+`docs/verification-jiongnew/` is not part of the installed skill either. It is the evidence record
+for one measurement pass against a real target: what each script actually did, which independent
+method confirmed it, which defects were found, and which scenarios the target could not exercise.
+It exists so the **Coverage** claims in `SKILL.md` can be checked against runs instead of trusted,
+and so the gaps are written down where the next person will find them.

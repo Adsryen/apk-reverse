@@ -26,37 +26,77 @@ engine build id in `libflutter.so`'s version string.
 
 ## 2. Get a decompiler that matches that version
 
-**blutter** is the practical choice for Android `libapp.so` (arm64). It reconstructs the object pool
-and per-class declarations. It is a *source tree you build*, not a binary you download — and its
-prebuilt outputs only cover the Dart versions someone already built.
+You need a tool that resolves the snapshot container — something that turns `libapp.so` into named
+functions, class layouts and, above all, a **pool listing with `pp+0x…` offsets**. Everything in §4
+onward consumes that listing; without it the workflow cannot start, and no script in this skill can
+produce it (see §4 for why the mapping is not recoverable from the binary alone).
 
-The version question is the first obstacle, and it has a clean answer:
+Two routes exist. Pick deliberately, because their version reporting differs.
+
+**Route A — aotopsy: no toolchain, run it now.** A single static binary (pure Go) that parses the
+snapshot binary format directly, with no Dart VM and no SDK compile. On a real Dart 3.6.0
+`libapp.so` the full pipeline ran out of the box: 30,586 functions, 6,133 class layouts, 39,202 pool
+entries (38,274 resolved), 175,120 call edges with 95.7% of indirect sites annotated, plus
+`functions.jsonl`, `call_edges.jsonl`, `classes.jsonl`, `string_refs.jsonl`,
+`dispatch_table.jsonl` and an annotated `asm/` tree. It also supports x86_64, which blutter does not.
+
+Its `doctor` subcommand reports a Dart version that is a **structural profile label, not the SDK
+version**: on the sample above it printed `3.6.2` while the engine banner, the snapshot hash and a
+byte search all said `3.6.0`, and no `3.6.2` byte sequence existed in either `.so`. That matters only
+if you feed the number to a VM-compiling tool — use §1's banner for that. Its own README states the
+detection is structure-based, so expect the label to name the newest matching profile rather than the
+compiler's version.
+
+**Route B — blutter: full fidelity, needs a build.** It embeds a matching Dart VM and deserializes
+through the VM's own code paths, which yields the canonical `pp.txt` in the `pp+0x…` space. It is a
+*source tree you build*, not a binary you download: its `bin/` is gitignored and it publishes no
+release artifacts, so there is nothing prebuilt to fetch for a given Dart version.
 
 - blutter's git HEAD typically supports newer Dart than its shipped `dartsdk/` directory.
 - When the target's version is missing, blutter fetches it itself: it sparse-clones
   `dart-lang/sdk` at that version tag (only `runtime`, `tools`, `third_party/double-conversion`),
   generates a source list, and builds a `dartvm` static library for the target ABI.
-- That build needs a real toolchain: `cmake` (>=3.20 is fine, including 4.x), `ninja`, `git`, and a
-  C++ compiler with C++20 `<format>` support (VS 2022 on Windows, gcc>=13 / clang>=16 elsewhere).
-  A `vcvars64`-style environment must be active before the build, and `CMakeLists` in the tree pins
-  `cmake_minimum_required(3.20)`.
-- Budget **tens of minutes** for the first build of a new version and run it as a background job;
-  the compiler log is enormous (per-file include trees), so read only its tail.
+- That build needs `cmake` (>=3.20 is fine, including 4.x), `ninja`, `git`, and a C++ compiler with
+  C++20 `<format>` support. The documented VS 2022 requirement is **over-strict** — MSVC 19.34
+  (VS 17.4.3, Nov 2022) compiles and runs the `std::format` path, measured. A `vcvars64`-style
+  environment must be active, and `CMakeLists` pins `cmake_minimum_required(3.20)`.
+- Budget a **couple of minutes**, not "tens of minutes": the whole pipeline (clone, `init_env_win.py`,
+  sparse SDK clone, cmake, nja, link) measured **≈78 s** wall clock. It uses a unity build via
+  `dartvm_create_srclist.py`, which is why it is fast. The compiler log is enormous (per-file include
+  trees), so read only its tail.
+- **If the freshly built binary faults immediately** with `0xC0000005` and no output at all, do not
+  conclude anything about the sample. Relink it (`ninja` in
+  `build/blutter_dartvm<ver>_<os>_<arch>`) and try again; on the sample above the fault never
+  reproduced after a relink — including for the unchanged binary — and three subsequent runs each
+  completed in ~5.9 s. **One retry, then a relink, before you blame the target.**
 
-Outputs of interest:
+Outputs of interest (blutter):
 
 | Output | What it gives you | What it does *not* give |
 |---|---|---|
 | `pp.txt` | every object-pool entry with its `pp+0x…` offset: strings, types, closures, fields, stubs | who references what |
 | `objs.txt` | reconstructed object shapes with type annotations | code |
-| `asm/` | per-class declarations | **instructions — there are none here** |
+| `asm/` | class layouts **and function bodies with full instruction listings**, pool annotations and resolved call targets | a pseudocode-level view |
 | `ida_script/`, `blutter_frida.js` | symbol/annotation helpers | a finished analysis |
 
-> `asm/` having one file per (obfuscated) class invites the assumption that it holds disassembly.
-> It does not. Do not plan around it.
+> `asm/` is the richest artifact in the chain. It is one file per **library URI** (mirroring the
+> package path), not per class as its name suggests, and it carries annotated disassembly such as:
+>
+> ```
+> // 0x923b3c: r0 = LinkedHashMap.from()
+> //     0x923b3c: bl  #0x60165c  ; [dart:collection] LinkedHashMap::LinkedHashMap.from
+> ```
+>
+> An earlier revision of this file claimed `asm/` contained no instructions and told the reader to
+> ignore it. That was wrong and cost real time — plan around `asm/` as your primary annotated
+> disassembly source.
 
 **`product` builds carry no debug info.** Expect `no-code_comments`, no function names, and
-obfuscated identifiers. That is normal; the strings still survive (see §7).
+obfuscated identifiers. That is normal; the strings still survive (see §7). Note this is a *format*
+floor, not a tooling gap: the Dart compiler drops field names outside debug builds, so roughly
+97-99% of instance field names are simply absent, and local/captured variable names are gone
+entirely. Accessor-based recovery (`get:`/`set:` still carry the name) recovers part of the field
+picture; the rest should be rendered as unknown rather than guessed.
 
 ## 3. The object pool is the whole game
 
@@ -72,6 +112,13 @@ Two offset spaces exist and they are **not the same number** — mixing them was
 Keep the mapping explicit in your notes. When a tool reports "this string is at X", state which
 space X is in.
 
+**There is no constant between the two spaces — do not go looking for one.** The relationship is a
+property of the *reconstructed* pool, not of the file, so it cannot be computed from `libapp.so`
+alone. Measured over the 4,241 strings that appear in both the string table and `pp.txt`, there were
+**4,237 distinct deltas** (range −1,361,429 to +277,654). A string recovered by file offset therefore
+does not lead to its pool offset, which is exactly why §2 insists on a snapshot-decoding front end:
+it is what gives you the `pp+0x…` space in the first place.
+
 ## 4. Build your own reference index (blutter will not give you this)
 
 `pp.txt` tells you what is in the pool. To *find the code that uses it* you need pool-offset →
@@ -84,10 +131,26 @@ python dart_pprefs.py --lookup pp_refs.json 0x1d1a8 0xc9d0
 
 **Do not build this index with a full-capstone pass.** Decoding every instruction of a multi-MB
 `.text` with `detail=True` and querying `regs_access()` per instruction costs minutes of CPU and
-1–2 GB of peak memory, and on a 16 GB host it presents as a hang with no progress output. Only three
-encodings can read the pool, so decode them from the raw 32-bit words instead — the shipped script
-does exactly that and finishes in seconds. The same argument applies to building a call graph
-(§9): decode `B`/`BL` arithmetically.
+1–2 GB of peak memory, and on a 16 GB host it presents as a hang with no progress output. Only a
+handful of encodings can read the pool, so decode them from the raw 32-bit words instead — the
+shipped script does exactly that and finishes in seconds.
+
+**But do not fall back to a linear capstone sweep either.** A Dart AOT `.text` begins with snapshot
+metadata, not instructions — on a real `libapp.so` the section started at `0x4a0000` while the first
+Dart function prologue (`stp x29, x30, [sp, #-imm]!`) was at `0x4b143c`. A linear sweep starting at
+offset 0 dies on that metadata and returns **zero instructions**, which looks exactly like "this
+library has no code". If you need capstone here, start at a known function address, or use
+`skipdata=True`, and treat an implausibly small count as a decoding problem before you treat it as a
+property of the file.
+
+The same mask-based argument applies to building a call graph (§9): decode `B`/`BL` arithmetically
+rather than by sweeping.
+
+**A live example of why the index's completeness matters:** after this file's advice to "count the
+references before editing a shared constant", one pool offset measured `[0 refs]` with the shipped
+script and `[79 refs]` once a missing load family was added to the scanner. A one-sided quiet gap in
+the scan reads as "nothing uses this", which is the answer that gets a shared constant edited
+carelessly. If a count looks surprisingly low, suspect the scanner before believing the pool.
 
 ## 5. What the registers mean
 

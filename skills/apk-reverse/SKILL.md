@@ -73,10 +73,32 @@ vocabulary and a set of reassuring numbers.
 - The native layer: `.so` hosts, tamper-triggered self-termination, forged ELF structure, and
   neutralising a terminate path without freezing the process (`native-and-so.md`,
   `native-tamper-and-suicide.md`).
-- Flutter / Dart AOT: pinning the engine version, decoding the object pool, locating and patching
-  business logic inside `libapp.so` (`dart-aot.md`).
+- Flutter / Dart AOT: analysing and patching `libapp.so` **given a snapshot dump** — pool-reference
+  counting, disassembly windows, caller indexing, patch-site choice (`dart-aot.md`). Measured on a
+  real Dart 3.6.0 build: `dart_disasm.py` decoded identically to capstone (32/32 and 96/96), the
+  caller index re-derived independently with a symmetric difference of 0, and a specific business
+  logic site was located end to end. **The snapshot dump is a dependency, not a detail** — see the
+  next section.
 - Runtime analysis with Frida, server-side API probing, feature-scoped TLS failures, update and
   forced-upgrade neutralisation, and the verification discipline everything above rests on.
+
+**Dependencies this skill does not ship — name them before the workflow starts:**
+
+- **Dart AOT analysis needs a snapshot dump.** `dart-aot.md`'s workflow begins at `pp.txt`; producing
+  it requires a snapshot container resolver that this skill does not contain and cannot synthesize.
+  `dart_pool_strings.py` reports **file** offsets while `pp.txt` and `dart_pprefs.py` speak in **pool**
+  offsets, and the mapping between those two spaces is not a constant: over the 4,241 strings present
+  in both, a measured run found 4,237 distinct deltas. Ship a pinned front end (aotopsy — pure Go, no
+  toolchain) or build blutter (~80 s, needs a C++ toolchain). **Say which one you are using and why,
+  because the two report different Dart version labels for the same binary.** Do not describe the
+  object pool as something this skill decodes on its own.
+
+**How strong these claims are:** the Measured mechanisms below were established by running the
+scripts against a real target during the verification pass recorded in
+`docs/verification-jiongnew/`. The rest are **inferred** — documented from experience, but the
+repository carries no fixture, log or sample that reproduces them (its own `long-task-discipline.md`
+reserves *observed* for a claim with an exact command and output behind it). Treat the distinction as
+load-bearing rather than cosmetic, and label your own results the same way.
 
 **Not covered — say so rather than improvise:**
 
@@ -93,12 +115,65 @@ vocabulary and a set of reassuring numbers.
   cost and often concludes "switch to static"; it is not a catalogue of evasion for every detector
   you might meet.
 
+**Not exercised by the verification pass — do not read silence as support:** the packer, code
+virtualization, custom-linker, integrity-check-redirection and tamper-triggered-suicide scenarios
+were **not run** against the verification target, because that target has none of those features (no
+packer, no integrity checker, ordinary application class) and its unmodified build already fails to
+start, which removes the repack-and-regress loop those scenarios need. Nothing in
+`docs/verification-jiongnew/` is evidence either way about them. If you use those documents, the
+claims are still on the inferred footing described above.
+
+**Scripts this pass did not run** — so they carry no measurement at all, and any conclusion drawn
+from them should be labelled accordingly: `native_crash.py`, `apk_diff.py`, `snap.py`,
+`grab_crash.py`, `install_test.py`, `repack.py`, `dex_patch_bytes.py`, `dex_find_insn.py`,
+`dex_check_verifier.py`, `dex_classdiff.py`, `dex_strpatch.py`, `patch_smali.py`, `smtool.py`,
+`datastore_inject.py`, `probe_api.py`, `run_probe.py`, `tls_check.py`, `usb_net_proxy.py`,
+`devsh.py`, and the `dexpatch/` java rewriter. Their absence from the record is not a verdict on
+them. Note in particular that `grab_crash.py` claims to recover stacks hidden by a crash-reporter
+SDK — the exact situation the verification target presented — and was not tried, so that claim
+remains **unverified** and the pass used a purpose-written Frida probe instead.
+
 **The fallback, as an instruction:** if the target does not match that list, or no symptom-index row
 matches, **stop and classify before choosing a branch.** Answer the thirteen questions first. If the
 shape still does not fit — an unknown runtime, a mechanism you cannot name — say exactly that, and
 propose the cheapest experiment that would identify it, rather than taking the closest documented
 route and applying it anyway. A wrong branch here does not fail loudly: it produces an artifact that
 builds, runs, and does the wrong thing.
+
+## Hand-off points — where this skill ends and another view begins
+
+Three boundaries that are easy to walk into without noticing. Each names what the other side owns,
+rather than restating it, because two copies of the same advice drift apart.
+
+**1. JNI — a Java `native` declaration and its implementation are two different views of one function.**
+This skill reads the Java side (dex) and the native side (`.so`) with different tools, so the join is
+where analyses go wrong.
+
+| Form | What you see | How to find it |
+|---|---|---|
+| Static linkage | symbol `Java_<pkg>_<Class>_<method>` in `.dynsym` | search the dynamic symbol table. Under R8 the class name is a short name, so the symbol deforms with it and a search for the readable original finds nothing |
+| Dynamic registration | **nothing** in the symbol table — binding happens at runtime | find `RegisterNatives` call sites, or hook it to read the binding table. Obfuscated targets prefer this, and a symbol search fails **silently** on it |
+| Native → Java callbacks | native code pulling data back through Java | follow `FindClass` / `GetMethodID` / `CallObjectMethod` |
+
+`FindClass`/`RegisterNatives` in a `.so` tell you a JNI boundary exists even when no
+`Java_*` symbol does. **Strength note:** the three rows above are documented behaviour, not results
+from the verification pass, which did not trace a JNI boundary end to end; `FlutterJNI.loadLibrary`
+appearing in a dex is the closest it came. Treat them as a map, not as a measurement.
+
+**2. Hardening — a dex-side packer observation is a native-side implementation question.** If the dex
+turns out to be a shell, the logic is behind a loader, and the analysis moves to the `.so` that
+performs the unpacking. `packers.md` owns the dex-side identification; the native deep dive belongs on
+the other side of this boundary. **Not exercised by the verification pass** — that target had no
+packer, so this pointer carries no measurement.
+
+**3. The existing native boundaries — read native anomalies from the APK side, not from inside.** 
+`native-and-so.md` and `native-tamper-and-suicide.md` are deliberately scoped to what you can conclude
+*from the APK side*: a repacked build that dies instantly with a null-looking fault, a Java-layer
+check that reports success while the process dies, a terminate path you made not-return. That
+judgement belongs here, because it is about deciding whether your *patch* caused the death. Deep
+native work — restoring a symbol, rebuilding a call graph, reversing an OLLVM function — is a
+different activity with a different toolchain. Point across rather than duplicating: if you need the
+latter, say so instead of extending these two files into it.
 
 ## Symptom index — a matching row is a stop signal
 
@@ -111,7 +186,9 @@ unread in this repository.
 | What you observe | Load first |
 |---|---|
 | A repackaged/re-signed build **dies before your code runs**; `SIGSEGV`, all registers zero, `pc=0`, `fault addr` near `0x0` | `native-tamper-and-suicide.md` (deliberate crash), then `code-virtualization-and-custom-linkers.md` |
-| **No packer** (Application is the app's own, dex readable) **and it still dies** | `code-virtualization-and-custom-linkers.md` |
+| **No packer** (Application is the app's own, dex readable) **and it still dies** | `code-virtualization-and-custom-linkers.md` §a loader is still a possibility; but if the same build also dies on a *second, unrelated* device you are looking at an ordinary startup fault, not a hardened one |
+| The app dies at startup on **every** device, packed or not, **and there is no tombstone** while `crash_dump` reports `already traced` and logcat says `exited cleanly (0)` | the target's launch section in the verification record under `docs/verification-jiongnew/` — a bundled crash reporter (Sentry NDK) has taken the signal handlers, so the platform's own evidence trail is gone. Frida spawn-gating is the recovery route; it needs a working frida-server, which a disguised one may not be |
+| A `FORTIFY: pthread_mutex_lock called on a destroyed mutex` abort in a Flutter app, on the **main** thread, before the first frame completes | `dart-aot.md` — check `libapp.so` is actually being loaded; Flutter's engine bootstrap is the usual place a native lifecycle fault surfaces |
 | Log says a **Java-layer** signature/integrity check **passed**, yet the process dies | `code-virtualization-and-custom-linkers.md` §a Java-layer "signature killer" is a decoy |
 | Deleting a library fixes validation but yields `UnsatisfiedLinkError: dlopen failed: library "X" not found` | `code-virtualization-and-custom-linkers.md` §the deadlock that eats hours |
 | Whole classes appear as bare `native` declarations with no body | `code-virtualization-and-custom-linkers.md` |

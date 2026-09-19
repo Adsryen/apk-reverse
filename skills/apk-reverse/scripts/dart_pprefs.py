@@ -18,8 +18,16 @@ seconds, and a flat memory profile.
 Recognised forms (AArch64, little endian), with x27 = pool base:
 
     add  xD, x27, #imm12, lsl #12   ->   xD = x27 + (imm12 << 12)
-    ldr  xD, [xN, #imm12 * 8]       ->   64-bit or 32-bit variant
-    ldur xD, [xN, #simm9]           ->   64-bit or 32-bit variant
+    ldr  XD, [xN, #imm12 * size]    ->   GP register file, size from bits 31-30
+    ldr  DD, [xN, #imm12 * size]    ->   SIMD&FP register file (bit 26 set)
+    ldur XD/DD, [xN, #simm9]        ->   unscaled variant, both files
+
+Both register files must be covered. Restricting the LDR form to the GP words
+(0xF94/0xB94) silently drops `ldr dN, [x27, #imm]` (0xFD400000), which is how every
+*double* constant in the pool is read -- an entire class of references disappears from
+the index. On a real Dart 3.6.0 libapp.so that was 302 pool offsets and 1,802 sites lost
+(measured, see the verification record); one of them had 150 reference sites that would
+all have been reported as zero.
 
 A reference is either a direct load whose base is x27, or a load consuming the register an
 ADD just derived from x27. The compiler emits that pair back to back, so a small window
@@ -93,16 +101,21 @@ def scan(text_addr, blob, window):
             pending[w & 0x1F] = [imm << 12, i]
             continue
 
-        ldr64 = w & 0xFFC00000 == 0xF9400000
-        ldr32 = w & 0xFFC00000 == 0xB9400000
-        ldur64 = w & 0xFFE00C00 == 0xF8400000
-        ldur32 = w & 0xFFE00C00 == 0xB8400000
+        # LDR (immediate) / LDUR across BOTH register files. Bits 31-30 give the access
+        # size and therefore the immediate scale; bit 26 selects the SIMD&FP file.
+        # Matching only the GP words (0xF94/0xB94) drops `ldr dN, [x27, #imm]`
+        # (0xFD400000) and with it every double constant read from the pool.
+        ldr_scale = {0xF9400000: 3, 0xB9400000: 2, 0x79400000: 1, 0x39400000: 0,
+                     0xFD400000: 3, 0xBD400000: 2, 0x7D400000: 1, 0x3DC00000: 4,
+                     }.get(w & 0xFFC00000)
+        ldur = (w & 0xFFE00C00) in (0xF8400000, 0xB8400000, 0x78400000, 0x38400000,
+                                    0xFC400000, 0xBC400000, 0x7C400000, 0x3C400000)
 
-        if ldr64 or ldr32 or ldur64 or ldur32:
+        if ldr_scale is not None or ldur:
             rn = (w >> 5) & 0x1F
             rd = w & 0x1F
-            if ldr64 or ldr32:
-                disp = ((w >> 10) & 0xFFF) << 3
+            if ldr_scale is not None:
+                disp = ((w >> 10) & 0xFFF) << ldr_scale
             else:
                 disp = sx((w >> 12) & 0x1FF, 9)
             if rn == POOL_REG:
