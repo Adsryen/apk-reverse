@@ -1,30 +1,68 @@
 ---
 name: apk-reverse
-description: Reverse engineer, debloat, de-ad, patch, or re-sign Android APKs, and analyze their runtime and server-side behavior. Use when a task involves an .apk/.aab/.dex/.so sample, smali or dex patching, Frida/objection runtime hooking, repacking and re-signing, removing ads or SDK trackers, probing a mobile app's HTTP API, or deciding whether a client-side patch is even capable of achieving the goal. Covers recon, anti-tamper, ad removal, membership/paywall limits, dex-level surgical patching, repack pitfalls, device and emulator setup, and a hard-won failure catalogue.
+description: Reverse engineer, debloat, de-ad, patch, or re-sign Android APKs, and analyze their runtime and server-side behavior. Use when a task involves an .apk/.aab/.dex/.so sample, smali or dex patching, Frida/objection runtime hooking, repacking and re-signing, removing ads or SDK trackers, probing a mobile app's HTTP API, or deciding whether a client-side patch is even capable of achieving the goal. Covers recon, anti-tamper, ad removal, membership/paywall limits, dex-level surgical patching, repack pitfalls, device and emulator setup, and a hard-won failure catalogue. Load the body before planning any patch work: it opens with a symptom index and four gates that must be cleared first.
 ---
 
 # APK Reverse Engineering & Patching
 
-Goal of this skill: get to a **verified, installable, still-working artifact** fast, and avoid the whole class of mistakes that silently destroy an APK.
+Goal: reach a **verified, installable, still-working artifact** fast — and avoid the whole class of
+mistakes that destroy an APK while looking completely healthy.
 
-Three rules override everything else in this skill:
+## How to use this file
 
-1. **Deliver it in the environment the request actually requires.** "It works" is not the goal; "it works under the stated constraint" is. A result obtained with root, or with live instrumentation, or with a host proxy, frequently does **not** satisfy a request for an installable artifact that works on a normal device — and it is easy to present that result as a finished one. Write the constraint down as a testable sentence in the first minutes and re-read it at every checkpoint. If you cannot meet it, say so and label any privileged workaround as a fallback, never as the deliverable. Full treatment: `references/long-task-discipline.md` §the most expensive drift.
-2. **Never ship an unverified APK.** "It assembles" is not "it works". Install it, launch it, exercise the feature you changed, on a real device or a close emulator.
-3. **Know which layer owns the behavior before you patch.** Ads, paywalls, and feature gates live in different places. Patching the wrong layer either does nothing or breaks the app. Classify first (see step 2 below), patch second.
+This file is a **procedure with gates**, not background reading. Three things are mandatory:
 
-## Symptom index — look here before you debug from first principles
+- Before you patch anything, clear the **four gates** in §Gates. They are actions with pass criteria,
+  not attitudes.
+- When anything fails in a way your current plan does not explain, **stop and check the symptom
+  index**. If a row matches, load that file before running another command.
+- When this file and your own reasoning disagree, **this file wins** until you have evidence that
+  overrides it. Every rule here is the residue of a failure that cost hours; your current intuition is
+  the intuition of someone who has not hit it yet.
 
-You arrived at a symptom, not at a file name. This table maps what you are *seeing* to the file that
-has already paid for that lesson. Skim it whenever something fails in a way the current plan does not
-explain; the cost of one lookup is minutes, and every entry below cost someone hours.
+## Four rules that override everything else
+
+**R1 — Write the deliverable as a testable sentence before you touch the target.**
+"It works" is not the goal; "it works under the stated constraint" is. Root-assisted, live-
+instrumentation, host-proxy and patched-device results frequently do **not** satisfy a request for an
+installable artifact that works on a normal phone — and it is easy to present such a result as
+finished. Write the sentence, re-read it at every checkpoint, and if you cannot meet it, say so
+plainly and label the privileged workaround a **fallback**, never the deliverable.
+→ `references/long-task-discipline.md` §the most expensive drift
+
+**R2 — Change one variable at a time, and keep a control build.**
+An experiment that flips two things teaches nothing when it fails, and a failure you cannot attribute
+will be attributed to the wrong cause. Every "the app rejects X" claim needs its own run, and every
+patch needs a same-pipeline control that still fails the old way.
+→ `references/long-task-discipline.md` §single-variable discipline
+
+**R3 — Never ship or claim an unverified artifact.**
+"It assembles" is not "it works"; "the process started" is not "the feature works"; "no error in the
+log" is not "the check is gone". Install it, launch it, exercise the exact feature you changed, and
+look at the screen. Prove the device is running the build you made — hash it, do not trust the
+filename.
+→ `references/verification.md`
+
+**R4 — Identify the owning layer before patching, and re-classify when reality disagrees.**
+Ads, paywalls, feature gates, integrity checks and update gates live in different layers (Java, dex,
+native, Dart/Unity, server). Patching the wrong layer either does nothing or breaks the app. If a
+patch "had no effect", the diagnosis was wrong — go back to classification instead of patching harder.
+→ `references/recon.md`, then the layer-specific file the symptom index points at
+
+## Symptom index — a matching row is a stop signal
+
+You arrive at a symptom, not at a file name. Each row below is a failure that has already been paid
+for. **If any row matches what you are observing, load the file before your next command** — not after
+your next three attempts. Reasoning from first principles at this point is how the same hours get
+spent twice; more than one entry here is a lesson that was re-derived by hand while the answer sat
+unread in this repository.
 
 | What you observe | Load first |
 |---|---|
 | A repackaged/re-signed build **dies before your code runs**; `SIGSEGV`, all registers zero, `pc=0`, `fault addr` near `0x0` | `native-tamper-and-suicide.md` (deliberate crash), then `code-virtualization-and-custom-linkers.md` |
 | **No packer** (Application is the app's own, dex readable) **and it still dies** | `code-virtualization-and-custom-linkers.md` |
-| Log says a **Java-layer** signature/integrity check **passed**, yet the process dies | `code-virtualization-and-custom-linkers.md` §a Java-layer signature killer is a decoy |
-| Deleting a library fixes validation but yields `UnsatisfiedLinkError: dlopen failed: library "X" not found` | `code-virtualization-and-custom-linkers.md` §the deadlock |
+| Log says a **Java-layer** signature/integrity check **passed**, yet the process dies | `code-virtualization-and-custom-linkers.md` §a Java-layer "signature killer" is a decoy |
+| Deleting a library fixes validation but yields `UnsatisfiedLinkError: dlopen failed: library "X" not found` | `code-virtualization-and-custom-linkers.md` §the deadlock that eats hours |
 | Whole classes appear as bare `native` declarations with no body | `code-virtualization-and-custom-linkers.md` |
 | A library's **SONAME does not match its filename** | `code-virtualization-and-custom-linkers.md`, `native-and-so.md` |
 | Your edit had **no effect at all**, with no error | `packers.md` §map the validation boundary |
@@ -41,6 +79,34 @@ explain; the cost of one lookup is minutes, and every entry below cost someone h
 | The dialog is gone but the feature is still locked | `membership-and-limits.md` / `account-gates.md` — decide server vs client authority before patching again |
 | You are about to discard a route as "blocked" | `packers.md` — re-read it before writing any route off; mis-attributed failures have removed viable routes for hours |
 | The task has run long and you are unsure what is already proven | `long-task-discipline.md` §keep a live record |
+
+## Gates — clear these before you patch, in order
+
+Each gate is an **action with a pass criterion**. Do not proceed past a gate you have not cleared, and
+do not treat "I understand the idea" as clearing it. Skipping a gate is not a shortcut; it is how the
+work gets redone.
+
+**G1 · Deliverable form.** State, in one sentence you could hand to someone else, what artifact must
+exist at the end and under what constraints (rooted or not, installable on a stock device or not, must
+survive updates or not, online or offline). *Pass:* the sentence names a testable constraint, not an
+activity. *Fail:* you are solving a problem in an environment the deliverable will never see.
+
+**G2 · Environment truth.** Run `scripts/doctor.py` (and `scripts/preflight.py` if a device is in
+play). *Pass:* you know which toolchains and scripts can actually run here, and you have seen the
+environment warnings — clock skew, leftover `adb forward`/proxy, a device-side frida process already
+running, a tool installed off-PATH. *Fail:* you are about to attribute to the target a failure caused
+by your own setup.
+
+**G3 · Code location.** From the manifest and dex, answer: is there a packer, where does the app's own
+code live (dex / native / Dart / Unity / server), and is any of it virtualized to native. *Pass:* you
+can name the class that owns the behaviour you intend to change, or you have an explicit plan to find
+it. *Fail:* you are about to patch a layer you have not located. If recon says "no packer", still
+check the virtualization shape — see the index rows above.
+
+**G4 · Baseline and control.** *Pass:* you have a control run — the unmodified original, or a
+zero-change repack through the same pipeline — and you have recorded the observed failure (including
+**time-to-death**, if it dies). *Fail:* when the patched build misbehaves you will have nothing to
+compare against, and every later measurement is unfalsifiable.
 
 
 ## Start here: classify the target in thirteen questions
@@ -110,9 +176,19 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 
 ## The workflow, end to end
 
+Steps are ordered. **Skip a step only when its stated skip condition is met** — "it seems
+unnecessary" is not a condition, and it is the reason most of the failures in `pitfalls.md` happened.
+
+**Two-strike rule.** If the *same kind* of attempt fails twice, stop and go back to classification.
+Do not run a third variation of a hypothesis that has already failed twice. Two failures of one shape
+means the model is wrong, not that the parameters need tuning — and the third attempt is where an
+entire round gets spent confirming what the first two already said. Re-read the symptom index at that
+point; it exists for exactly this moment.
+
 1. **Preflight, then Recon** — `scripts/doctor.py` is the cheapest possible first command: it reports which toolchains and scripts can actually run here, and surfaces the environment facts that poison experiments (clock skew, leftover `adb forward`/proxy, a device-side frida process already running, a tool installed off-PATH). Then `scripts/preflight.py` before anything else if a device is involved (it takes seconds and prevents a whole class of false conclusions), then `references/recon.md`. Manifest, package name, version, ABI, dex count, packer, embedded SDKs, where the app's own code lives. Ten minutes here saves hours. **If it is packed, unpack before anything else** (`references/recon.md` §unpacking): you cannot patch code you cannot read, the encrypted payload lengths tell you which dumped dex is the original, and a memory dump must be de-duplicated by hash and structurally validated before any of it is trusted.
    **If recon says there is no packer but a re-signed build still dies**, you are in the layer `references/code-virtualization-and-custom-linkers.md` covers — do not proceed on the assumption that "no packer" means "editable".
    **If the app already dies on its own** — especially at a roughly constant time after launch, or with a native crash — locate the mechanism *before* planning any patch (`references/native-tamper-and-suicide.md`, `scripts/native_crash.py`). Record the observed time-to-death: it is the baseline every later attempt is measured against, and without it a surviving run cannot be told from a changed schedule.
+   *Skip condition:* never skipped. G2/G3 in §Gates are cleared here or not at all.
 2. **Extract strings and endpoints** — build a picture of the app's API surface and SDK inventory from the dex string tables. No decompiler needed for this, and it is fast. Scripts: `scripts/dex_strings.py`.
 3. **Trace to the owning class** — find the class that wraps the behavior (the app almost always wraps third-party SDKs in one helper). Reverse-lookup instructions: `references/dex-patching.md` §finding-the-call-site.
 4. **Decide the patch layer** — client SDK call / client rendering / client data consumption / server contract. See the table in `references/ad-removal.md`.
@@ -122,6 +198,41 @@ Answer these before touching a tool. Every one of them changes the whole plan.
 6c. **Handle account gates only after classifying them** — if the request mentions sign-in or binding, apply `references/account-gates.md` and state plainly which guarded screens become usable and which stay empty because their content is account-scoped.
 7. **Verify on device** — `references/environment.md` + `references/verification.md`. Check: launches, the changed behavior actually changed, nothing unrelated broke, and **the app reaches its normal UI with no blocking dialog**. First prove the artifact actually changed on the device -- a package manager reporting success does not prove an interposed confirmation was accepted (P18). Capture continuously for the first ~20 seconds after launch, **and look at the captures** — sampling gaps are how a blocking modal goes unseen (P20), and a burst of images that were never inspected is not evidence. If the accessibility tree is empty, the image is the primary evidence rather than a fallback.
 8. **Log what you learned** — if a failure cost you more than thirty minutes, add it to `references/pitfalls.md`. That file is the most valuable artifact in this skill.
+
+## What "done" means — do not claim it earlier
+
+Every item below must be true before you report completion. Anything less is a **checkpoint** and must
+be labelled as one, out loud, with what remains. Premature "done" is the most damaging thing you can
+report, because it ends the investigation while the user believes the problem is solved.
+
+1. **The artifact exists and its identity is recorded** — path plus hash, not a filename.
+2. **It was installed and launched on the environment the deliverable sentence names** (G1/R1). If
+   that environment was not available to you, say so and label the result accordingly.
+3. **The behaviour you changed is verified changed** — by direct observation of the feature, not by
+   the absence of an error message. "The log is clean" is not evidence; "the screen shows X" is.
+4. **The features it touches still work.** You exercised them. A build that starts but whose affected
+   feature is dead is not a result.
+5. **The original limitation is stated if any survives** — with the coupling that causes it, so the
+   next person can decide whether to accept it.
+6. **Nothing you did leaves the target or the device in a broken state** unless that was the goal, and
+   any privileged workaround is labelled a fallback rather than the deliverable.
+
+If items 1–4 hold but the environment was wrong, you have a **prototype**, not a deliverable. Say
+"prototype" and name the gap.
+
+## Stop conditions — halt and re-classify, do not retry
+
+These are moments where continuing to push forward is the wrong move. Each has cost hours somewhere.
+
+- **The same shape of attempt failed twice.** See the two-strike rule above.
+- **A patch had no effect and you were about to try a third variant of it.** No effect means the
+  diagnosis was wrong, not that the patch was unlucky. Re-classify the layer.
+- **A new failure has no place in your current model.** That is the symptom index's trigger condition.
+- **You are about to write off a route as "blocked"** without a control build proving the block is
+  the app's doing rather than your pipeline's. Mis-attributed blocks have removed viable routes.
+- **You are about to claim success on absence of errors.** See §What "done" means.
+- **A measurement disagrees with a conclusion you already recorded as settled.** Re-open the
+  conclusion; do not explain the measurement away.
 
 ## Non-negotiable constraints
 

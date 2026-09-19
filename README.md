@@ -9,6 +9,34 @@ organized for progressive disclosure — a short decision-oriented `SKILL.md`, d
 references loaded only when a step needs them, and parameterized scripts you can run
 directly.
 
+## How an agent is expected to consume this
+
+`SKILL.md` is deliberately written as a **procedure with gates** rather than as advice, because the
+observed failure mode is not ignorance — it is a model reading the whole thing, agreeing with it, and
+then reasoning from first principles anyway.
+
+So there are four things in the body that are meant to be *acted on*, not read:
+
+- **Four override rules (R1–R4).** Where they conflict with the current plan, they win until evidence
+  overrides them.
+- **A symptom index.** Each row is a failure that has already been paid for. **A matching row is a
+  stop signal**: load that file before running another command, rather than after a few more attempts.
+  Reasoning past a known symptom is how the same hours get spent twice.
+- **Four gates (G1–G4),** each an action with a pass criterion. "I understand the idea" does not clear
+  a gate. They exist so that classification, environment truth and a control build happen *before*
+  the first patch, not after the third failure.
+- **A two-strike rule and stop conditions.** Two failures of the same shape mean the model is wrong,
+  not the parameters. The third variant of a hypothesis that already failed twice is where rounds go
+  to die.
+
+And one thing at the end that is meant to be *withheld*: **"done"** has a definition (six items). A
+clean log is not one of them. Anything short of all six is a checkpoint, and should be reported as a
+checkpoint with what remains.
+
+If you are an agent reading this: the cheapest possible first command is
+`python scripts/doctor.py`. It tells you which of these tools exist here, which scripts can actually
+run, and whether something in the environment is already poisoning your measurements.
+
 ## What it is good at
 
 - Deciding **fast** whether a request is even achievable client-side, instead of
@@ -49,7 +77,13 @@ directly.
 ## Structure
 
 ```
-SKILL.md                  decision tree, workflow, hard constraints, indexes
+SKILL.md                  a procedure with gates, not background reading:
+                          how-to-use  -> four override rules (R1-R4)
+                          symptom index (a matching row is a stop signal)
+                          four gates (G1-G4, actions with pass criteria)
+                          thirteen classification questions
+                          the workflow, with a per-step skip condition and a two-strike rule
+                          what "done" means  ->  stop conditions  ->  constraints  ->  indexes
 references/               loaded on demand, one topic each
   recon.md                    identify packer, SDKs, code location, tamper checks; unpacking
   packers.md                  hardened targets: rejection signals, measuring the validation
