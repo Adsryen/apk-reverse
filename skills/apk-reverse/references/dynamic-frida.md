@@ -111,6 +111,38 @@ device.resume(pid)          # resume ONLY after hooks are ready
 
 **Common bug:** resuming before the script has finished loading loses the first ~100–300 ms, which is exactly where init happens. Have the script `send()` a ready signal (the probe template below sends `PROBE-READY`) and resume only after receiving it.
 
+### Spawn keeps the Activity stack down — patch, detach, then launch
+
+Spawn mode is the right way to catch startup, and it carries a trap that costs a whole
+observation round when it is not expected: **on some targets the Activity stack never comes
+up while you are attached.** `dumpsys window | grep mCurrentFocus` stays `null`, screenshots
+come back blank or a few kilobytes, and the process is alive with no UI — which reads as
+"the app is broken" when it is only unrendered.
+
+The app is not broken: launch it normally, with no session attached, and it renders. So the
+ordering is the fix, not a different hook.
+
+1. spawn and attach, as above;
+2. let the probe write what it needs into memory (`Memory.patchCode`);
+3. **detach** — a memory write is a plain write and survives, while every `Interceptor`
+   hook goes away with the session. For an observation run that is usually what you want,
+   because it removes your instrumentation from the picture entirely;
+4. start the Activity normally and capture.
+
+`scripts/spawn_patch_detach.py` implements exactly this, with
+`scripts/hook_patch_only.js` as the minimal "neutralise one death site and report `PATCHED`"
+probe.
+
+Two consequences worth stating:
+
+- **A memory patch is enough to observe a build that cannot run on its own.** If a build dies
+  at startup you do not have to ship a patched file to look at its UI — write the fix in
+  memory, detach, launch. This is also the cleanest way to run the **unmodified original** as
+  a control while still getting past its death site (`verification.md` §the control build rule).
+- **Do not conclude "no UI" from a blank capture taken while attached.** Check
+  `mCurrentFocus`: if it is `null` under an attached session and non-null without one, you
+  have this problem, not a finding about the target.
+
 ## Frida 17+ gotchas
 
 The preferred fix for every symptom in the table above is **version alignment**. Use these only when you genuinely must run a 17+ build.
@@ -402,6 +434,34 @@ Countermeasures, in order of least disruption:
 4. Only then consider a gadget-based approach.
 
 **Remember:** most `frida`/`root` strings in a decompiled APK belong to third-party SDKs' own detection lists, not to the app. Verify that **app code** references them before doing anti-anti work.
+
+### When the ROM hunts your instrumentation
+
+Some vendor ROMs treat a device-side `frida-server` as hostile and kill it on a timer. The
+symptom is not an error message — it is a working session that disappears. A later
+`attach`/`spawn` fails with `unable to connect to remote frida-server`, or with
+`TransportError: connection closed` **during `spawn`, before `resume`**. That second shape is
+easy to misread as the target crashing during startup. It is not the target.
+
+Measured on one vendor build: the server was killed repeatedly across a work session, and on
+one occasion the whole device restarted, briefly taking `system_server` with it
+(`Can't find service: activity`, `No service published for: input`). Both symptoms are
+environment, not evidence about the app.
+
+- **Check the server is alive immediately before every experiment**, not once per session:
+  `adb shell "su -c 'pidof <server-name>'"`. Restart it if it is gone.
+- **Distinguish the two failure shapes.** `connection closed` at `spawn` = server died or was
+  killed (environment). `connection closed` just after `resume` = the target exited — *that*
+  one is about the app.
+- **Rename the server binary and move it off the obvious path.** It defeats simple filename
+  sweeps. It does not hide from a target that lists the directory, so do not treat the rename
+  as a fix for detection — only as protection from cleanup.
+- **Budget a restart, not a re-analysis.** A killed server costs seconds; a round spent
+  re-deriving the previous conclusion costs far more.
+- **If a device reboot interrupts the run, re-establish state before measuring**: server up,
+  `adb forward` re-created, screen awake and unlocked, installed-build hash re-read. A
+  measurement taken across a reboot is a measurement of two states
+  (`long-task-discipline.md` §keep the observation window clean).
 
 ### When live attach cannot work at all
 

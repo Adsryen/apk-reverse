@@ -1,4 +1,4 @@
-# Tool verdicts — measured on `jiongnew.apk`
+# Tool verdicts — measured on a real target
 
 One verdict per script, drawn from the closed set:
 
@@ -457,7 +457,7 @@ Step 3 resolves the site completely, including the enclosing Dart closure and it
 ```
 7a943c: add  x1, x27, #0x23, lsl #12
 7a9440: ldr  x1, [x1, #0x540]   ; pp+0x23540 AnonymousClosure: (0x7a9508),
-                                ;   of [package:guoguo/pages/video/video_page.dart] ShowRewardAdProvider
+                                ;   of [package:<app>/pages/video/video_page.dart] ShowRewardAdProvider
 7a9454: add  x1, x27, #0x23, lsl #12
 7a9458: ldr  x1, [x1, #0x430]   ; pp+0x23430 Obj!ShowRewardAdFamily@b487a1 : {  [8 refs]
 ```
@@ -475,7 +475,7 @@ disassembly window, the caller index — the kit does do, and correctly.
 
 `dart-aot.md` §2 says of blutter's `asm/`: *"per-class declarations — instructions — **there are none
 here**. Do not plan around it."* That is **wrong** for this blutter HEAD on Dart 3.6.0.
-`bout5/asm/windmill_ad_plugin/src/ads/reward/reward.dart` is 1,327 lines / 71,099 B and contains class
+`bout5/asm/<plugin>/src/ads/reward/` is 1,327 lines / 71,099 B and contains class
 layouts, function signatures **and a full instruction listing with pool annotations and resolved call
 targets**:
 

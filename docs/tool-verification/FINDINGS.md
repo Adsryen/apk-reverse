@@ -87,7 +87,7 @@ checkers (`check_refs.py`, `check_repo.py`) pass, so these are invisible to the 
 
 | # | Location | Problem |
 |---|---|---|
-| 1 | `dart-aot.md` §2 | Claims blutter's `asm/` has *no instructions* — "Do not plan around it." **Wrong.** `asm/windmill_ad_plugin/src/ads/reward/reward.dart` is 1,327 lines carrying class layouts, signatures, a full instruction listing, pool annotations and resolved call targets. It is the richest artifact in the chain and the doc says to ignore it. |
+| 1 | `dart-aot.md` §2 | Claims blutter's `asm/` has *no instructions* — "Do not plan around it." **Wrong.** One plugin file under `asm/<plugin>/src/ads/reward/` is 1,327 lines carrying class layouts, signatures, a full instruction listing, pool annotations and resolved call targets. It is the richest artifact in the chain and the doc says to ignore it. |
 | 2 | `dart-aot.md` §2 | Budgets "tens of minutes" for the first blutter build; measured **≈78 s** (~30× pessimistic). Also demands a very recent C++ compiler; **MSVC 19.34 (Nov 2022) suffices**. |
 | 3 | `dart-aot.md` §7 | Presents two-byte hit chaining as an acceptance test. On this sample, 9,840 two-byte CJK candidates yield 2,081 chained runs, all garbage. |
 | 4 | `signature-derived-keys.md:61` | Documents `python scripts/sig_probe.py --live --pkg <pkg>` — the script has no `--pkg`; it takes `--live PKG`. Line 54 and `pitfalls.md` P27 give the correct form. |
@@ -169,7 +169,7 @@ The launch does show non-standard startup plumbing (observed):
 - `E m.tingfeng.too: Unknown bits set in runtime_flags: 0x40000000`
 
 And yet the dex-side packer verdict is clean: no hardening library in the native set, an ordinary
-`application android:name` (`app.video.guoguo.GApplication`), no known packer markers. Those two
+`application android:name` (the app's own class, not a packer stub), no known packer markers. Those two
 observations sit in tension.
 
 **Not resolved.** The `LoaderLog` emitter was not attributed to a specific class — the string exists

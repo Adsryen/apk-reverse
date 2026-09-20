@@ -32,11 +32,66 @@ cross-check with the program headers.
 |---|---|---|
 | `baksmali` / `smali` (jars) | `java -cp <jars> org.jf.baksmali.Main d <dex> -o <dir>` | round-tripping, reading a method precisely |
 | `dexlib2` | small Java program | method-level rewrite, leaves everything else untouched (`dex-patching.md`) |
-| **`ddc`** | `ddc app.apk -c <Class>` | **fastest read of dex as Java, plus query subcommands** — see below |
+| **`droidasc`** (ASC) | `droidasc findrefs app.apk string <S>` | **the fastest whole-APK cross-reference index** — reach for this FIRST, to *locate*. See below |
+| **`ddc`** | `ddc app.apk -c <Class>` | **fastest read of dex as Java, plus query subcommands** — reach for this SECOND, to *read*. See below |
 | `apktool` | `java -jar apktool.jar d/b` | whole-app decode including resources |
-| `jadx` | `jadx --no-res -d <out> <apk>` | readable Java for orientation; **not** a source of truth (see below) |
+| `jadx` | `jadx --no-res -d <out> <apk>` | readable Java for orientation; **not** a source of truth, and **not** a recon entry point (see below) |
 | `aapt2` | `aapt2 dump badging <apk>` | manifest facts, package name, versions |
 | `zipalign`, `apksigner` | from build-tools | alignment and signing |
+
+### droidasc (ASC) — ask an APK "who references this?", in one query
+
+Install it in one line. No JVM, no Android SDK, no GUI, no first-run indexing:
+
+```bash
+pip install droidasc          # provides the `droidasc` CLI
+```
+
+It treats the artifact as a **read-only database** instead of exporting a source tree: it probes the
+deflate stream in place and rebuilds only the minimal dex it needs, in memory, for the one class you
+asked about. Nothing is inflated to disk; there is no index-building phase to wait through. (Design
+and measurements are the author's; the BlackHat EU 2026 Arsenal abstract is the reference.)
+
+```bash
+droidasc findrefs app.apk string "/data/app/"        # every site that mentions a literal
+droidasc findrefs app.apk string com.example/sdk      # a channel name, a URL fragment, a field name
+droidasc findrefs app.apk type   com/foo/Bar         # who references a type
+droidasc findrefs app.apk method notify --class MainActivity --fuzzy-class
+droidasc listclass app.apk --prefix com/poc          # what classes exist (28210 classes: seconds)
+droidasc listclass app.apk -o classes.txt
+droidasc getclass  app.apk Lcom/poc/Main; -o Main.java
+droidasc getmanifest app.apk -o AndroidManifest.xml
+```
+
+Each hit names the **class and method** it sits in. That is the whole value: it turns "which of 28,000
+classes mentions this string" from a crawl over an exported tree into one sub-second query, and it works
+straight off the APK you were handed.
+
+**What it is for, and where it stops.** ASC answers *location* questions. It is not where you read a
+method body, and it does not replace the kit's dex tooling for patching. Its place is the first ten
+minutes of recon plus every later "where else is this used?" — the questions that otherwise send you
+grepping a hand-exported smali tree.
+
+**Three limits, and one of them is a trap.**
+
+- **A non-ASCII needle is not trustworthy through a shell.** A `findrefs string` query for a non-ASCII
+  literal returned nothing under Windows/PowerShell, and **an empty result is indistinguishable from a
+  broken argument encoding.** Many non-ASCII literals genuinely live in a native library rather than in
+  dex, so "nothing came back" is a plausible answer — which is exactly what makes the unverified
+  negative dangerous. Confirm it another way before recording it: search the dex bytes directly with a
+  `\u`-escaped needle, or run a control query you know must hit (a path fragment, a package name you
+  already read in the manifest) in the same session.
+- **A mangled class name may return only resources.** `listclass apk --prefix <the plugin's package>`
+  can come back with nothing but `R$anim` / `R$string` / `R$style` entries, which is **not** a dead end:
+  it is evidence the real class was renamed by R8. `findrefs string <the plugin's channel name>` still
+  hands you the obfuscated class implementing it. This is the single situation where ASC is not an
+  alternative to `ddc` but the only route — `ddc -c <FQCN>` needs the post-R8 name to start with.
+- **A hit is a *reference*, not a *call*.** `findrefs` proves a literal or type is mentioned in a method;
+  whether that method runs on the path you care about is a different question, and the answer comes from
+  the disassembly or from runtime (`dynamic-frida.md`).
+
+The division of labour is worth stating plainly: **ASC locates, `ddc` reads.** Running a full `ddc`
+export first, then grepping it, is the slow path this tool exists to replace.
 
 ### ddc — dex-to-Java with query subcommands (worth adopting)
 
@@ -72,6 +127,24 @@ so you still need string cross-references to infer meaning; output is a **readin
 aid, not compilable source** (occasional declaration/use ordering is inverted, and
 numeric resource ids appear as decimal integers); very large methods produce
 thousands of lines and are better approached via `findrefs`/`getmethod` first.
+
+Two more, both measured on a 28,210-class R8-flattened Flutter APK:
+
+- **`-c <FQCN>` cannot reach a renamed class, and `listclasses <pattern>` cannot recover it either.**
+  Asking for the plugin's documented name returned `class not found`; asking for its package prefix
+  returned only `R$anim` / `R$string` / `R$style` resources. The implementing class existed under a
+  short R8 name, reachable only by string cross-reference. **Plan for `droidasc` to close this gap** —
+  it is not a nicety, it is the difference between locating the class and not.
+- **A decompiled body can be semantically wrong, not merely ugly.** In one 9 KB helper class the
+  compiler emitted a `return 0;` inside a method declared to return `String`, reordered field
+  assignments, and produced empty `if/else` branches. None of that is safe to reason *about* control
+  flow without checking smali or bytecode. Treat a surprising construct as a decompiler artifact until
+  the bytecode agrees.
+
+**Use `findrefs` to locate, `-c`/`getmethod` to read, and the bytecode to decide.** Reading order
+matters: a full `ddc <apk> -o out/` export is a reasonable thing to *have*, but grepping that tree is
+not a substitute for one indexed query, and it is the slower of the two by a wide margin on any APK
+worth analyzing.
 
 **Classpath gotcha.** `baksmali`/`smali` need their dependency jars on the classpath together
 (`smali`, `antlr-runtime`, `stringtemplate`, `baksmali`, `dexlib2`, `util`, `jcommander`, `guava`).
@@ -112,6 +185,80 @@ completeness matters (`native-tamper-and-suicide.md` §Scanner traps).
 **Disassembler output is a hypothesis.** Fixed-width architectures (aarch64) decode almost any
 4-byte window into *some* instruction, so a wrong start offset yields plausible-looking garbage.
 Bound your window with a known entry point or a known call site.
+
+### Ghidra — the decompiler for a target whose decisive layer is aarch64
+
+The recurring shape: the app is fine, the dex is readable, and the layer that actually decides
+behaviour is a stripped aarch64 `.so`. A disassembler gives you instructions; only a decompiler gives
+you control flow. **Hand-walking an OLLVM control-flow-flattened function with `capstone` is the single
+most expensive route available**, and it is what you fall into when no decompiler is installed.
+
+Ghidra is free, runs headless, and decompiles aarch64. Setup is unzip plus a JDK (11+), which is why
+"there is no decompiler on this box" is normally an install step rather than a finding about the target
+(§Closing a capability gap).
+
+```bash
+# one-time: unzip the release; point Ghidra at a JDK (JAVA_HOME or the launch script)
+# headless: import, auto-analyse, run a post-script, discard the project
+analyzeHeadless <proj_dir> <proj_name> -import target.so \
+    -postScript DumpFunction.java <addr_or_symbol> -scriptPath <dir> -deleteProject
+```
+
+Three caveats learned the hard way:
+
+- **`analyzeHeadless` is slow and its auto-analysis is not free.** Import plus analysis of a 6 MB
+  stripped library is minutes, so it is exactly the kind of run that needs an explicit timeout. Budget
+  it once and reuse the project; do not re-import per question.
+- **Flattened control flow defeats the decompiler as well.** A `br x8` dispatcher with four constant
+  arithmetic operations in every function header is OLLVM flattening, and the output is a state machine
+  that resembles the program without being readable. **Removing the flattening is the work**
+  (`code-virtualization-and-custom-linkers.md`), not a prerequisite you can skip.
+- **A decompiler cannot go where the data is not.** When a library's strings and action names are
+  **encrypted in the file and exist only once the module is mapped in memory**, no static tool recovers
+  them by reading harder — escalate to runtime (`dynamic-frida.md`) instead of escalating the static
+  toolchain. Telling "install a decompiler" apart from "the decompiler cannot help here" is worth real
+  time: the two look identical from the outside, and only the first has a static answer.
+
+## Closing a capability gap — installing the tool IS the task
+
+A missing tool for the layer you must work in is not a constraint to design around. It is the next
+step. The measured cost of installation is almost always smaller than the cost of the workaround, and
+the workaround is what produces "we could not determine X" reports on targets where X was decidable.
+
+**The decision is not "can I do without it" — it is "how long does installing it take".** Three real
+numbers, from one Windows box working an R8-flattened Flutter target:
+
+| Gap | Install cost | What the workaround would have cost |
+|---|---|---|
+| No whole-APK cross-reference index | `pip install droidasc` — one command, seconds, no JVM, no SDK | hours of `grep` over a hand-exported smali tree, **per question asked** |
+| No arm64 decompiler | Ghidra — unzip plus the JDK already present; minutes | a manual ELF/`capstone` walk over an OLLVM control-flow-flattened 6 MB library, per function |
+| No Dart AOT snapshot front end | `aotopsy` — unzip and run (pure Go, no toolchain); or `blutter`, measured **≈78 s** end to end | "pool offsets can never be mapped", which turned out to be false |
+
+The third row is the instructive one. The documented cost ("tens of minutes for the first build") was
+about **30× pessimistic**, and the documented toolchain requirement was overstated. **A tool's stated
+prerequisites are a claim, not a measurement**, and the cost of checking is one attempt.
+
+Rules that follow:
+
+1. **Write the capability down before spending against it.** "arm64 decompilation — absent — install
+   Ghidra" is a task item. "arm64 decompilation — absent" with nothing after it is how a route gets
+   written off for the wrong reason.
+2. **Check off-PATH before declaring anything absent** (§"not on PATH" is not "not installed").
+   `APKREV_TOOLS` exists so a project-local tools directory or an SDK folder resolves.
+3. **Install, do not substitute.** A weaker tool's output presented as equivalent to the stronger
+   tool's output is a wrong conclusion with a clean audit trail — worse than an admitted gap.
+4. **Report the gap only when it is real.** "No arm64 decompiler exists here and it cannot be installed
+   because `<reason>`" is a valid finding. "I used `readelf` instead" is a different statement, and it
+   is not a finding about the target.
+5. **"Paid" and "GUI-only" are questions, not walls.** IDA has a headless MCP path; Ghidra has
+   `analyzeHeadless`; both are set-up steps. Ask a human only after that route is genuinely
+   unavailable.
+6. **One real disqualifier.** A decompiler cannot go where the data is not: if a target's strings and
+   action names are **encrypted in the file and only exist in memory**, then no static tool recovers
+   them by reading harder. Recognise that shape early and move the effort to runtime
+   (`dynamic-frida.md`) instead of escalating the static tools — that distinction is the difference
+   between "install a decompiler" and "the decompiler cannot help here", and they look identical from
+   the outside.
 
 ## MCP tool servers — an external dependency, not a tool on the shelf
 
@@ -178,7 +325,30 @@ Two consequences worth carrying into the plan:
 | `frida` (host) + `frida-server` (device) | `frida -U -f <pkg> -l script.js` | **host and device versions must match** — skew produces errors that look like a broken target (`pitfalls.md` P15) |
 | `objection` | `objection -g <pkg> explore` | quick Java-layer poking on top of Frida |
 | `mitmproxy` | `mitmproxy --mode regular` | request/response inspection; a device proxy is usually faster to set up than a transparent one |
+| `HaE` (Burp extension) | load into Burp, then read its rule set | **traffic *triage*, not traffic capture.** See below |
 | `adb` | everything | the primary device interface |
+
+**HaE is a reader, not a capture tool, and it is not always the right next step.** HaE (Highlighter and
+Extractor, `overspace-labs/HaENet`) is a Burp Suite extension that tags and extracts fields from HTTP
+messages — tokens, IDs, secrets, endpoints, fingerprints — so that a large session becomes readable
+without hand-scanning every request. It is genuinely useful when the bottleneck is *"there is traffic
+and I cannot see the parts that matter."*
+
+It is the wrong tool when the bottleneck is one of these three, and reaching for it there costs rounds:
+
+- **The requests never leave the client.** No capture tool can display a request that was never built
+  (`code-virtualization-and-custom-linkers.md` §what the native check actually reads). **Establish
+  whether traffic exists before buying tooling to read it** — a DNS/`connect`-level probe answers that
+  in a single run, and on the measured target it was the observation that ended the investigation
+  branch, not a capture.
+- **The body is encrypted by the app**, so the capture is ciphertext (`server-api.md`).
+- **Certificate pinning defeats the proxy**, in which case the empty capture is itself the finding
+  (`tls-and-cert.md`).
+
+Ordering that follows: **first prove there is readable traffic, then choose the reader.** `mitmproxy`
+captures; HaE triages; neither substitutes for the DNS/connect check that decides whether there is
+anything to triage. Treat "install a Burp plugin" as a step that must be justified by an existing
+capture, not as recon.
 
 Version alignment for Frida is a **hard gate**, not a nicety. Check both sides before writing a
 script, and check the device architecture — the server binary is per-ABI.
@@ -195,6 +365,40 @@ script, and check the device architecture — the server binary is per-ABI.
 **A version mismatch here wastes the most time of any tool in this file.** A Dart decompiler built
 for a different engine version produces output that is subtly wrong rather than obviously broken.
 Pin the version first (`dart-aot.md` §1) and do not "try it and see".
+
+## Using the kit's scripts instead of writing your own
+
+The scripts exist so that the *expensive, generic* parts of this work — decoding a dex instruction at an
+exact offset, recomputing a dex header in the right order, writing a 4-byte-aligned archive, resolving a
+PLT stub, bursting screenshots with evidence attached — are not re-derived per task.
+
+Re-deriving them is not neutral. A hand-rolled instruction decode that silently loses sync, or a
+hand-rolled repack that quietly drops alignment, produces **a confident wrong answer**, which is the
+exact failure class this skill exists to prevent. The cost shows up later, as a patch that "had no
+effect" or an install refused with a bare numeric code.
+
+**The rule: before writing a script, check whether one here already does it.** The index is in
+`SKILL.md`; the entry points that matter most are `doctor.py` (what can run here),
+`dex_find_insn.py` (get an exact offset instead of guessing one), `dex_patch_bytes.py` (apply and prove
+an equal-length patch), `apk_diff.py` (prove your own build was surgical), `repack.py` (aligned rebuild)
+and `snap.py` / `coldstart.py` (look at the screen with the evidence attached).
+
+**When a script here is genuinely wrong, that is a finding to fix and report — not a reason to quietly
+route around it.** Two live examples of the difference:
+
+- A decoder utility in this kit carried an **opcode name/width table misaligned by one entry across
+  `0x16`–`0x2C`** (23 rows). Everything decoding through that range **silently lost sync** and produced
+  offsets that were plausible and wrong — no exception, no warning. It was found by comparing against an
+  independent decoder and noticing a disagreement. **If two tools disagree, the disagreement is the
+  product**; it is the cheapest bug signal in this domain and the easiest to throw away by picking the
+  answer you preferred.
+- Conversely, a *tool's* negative result is not a finding about the target (§the general trap below).
+  Establish that the tool could have found the thing before recording that the thing is absent —
+  especially for string searches, where an empty result is exactly what an unfound string looks like.
+
+**Corollary for reporting.** "The kit's script X reported Y, and I cross-checked it against Z" is a
+conclusion. "I wrote my own parser because the script was awkward" is a gap you introduced, and it
+should be reported as one.
 
 ## "Not on PATH" is not "not installed"
 

@@ -49,6 +49,35 @@ native, Dart/Unity, server). Patching the wrong layer either does nothing or bre
 patch "had no effect", the diagnosis was wrong — go back to classification instead of patching harder.
 → `references/recon.md`, then the layer-specific file the symptom index points at
 
+## Tooling — what to reach for, in order, and how to notice what you are missing
+
+Most wasted rounds in this domain are not bad reasoning about the target. They are **the right question
+asked of a tool too weak to answer it**: an hour of `grep` over a hand-exported smali tree where one
+indexed query would do, or a full manual ELF walk where a decompiler was one `pip install` away. The
+failure is invisible from the inside, because the weak route still produces output.
+
+Four obligations. These are instructions, not preferences:
+
+- **Orient with an indexer, not with an export.** Before reading code, build the ability to *ask the
+  artifact questions* — `droidasc findrefs` (string/type/method → every reference site, sub-second) or
+  `ddc findrefs`. A full decompile is for reading a class you have **already located**; it is not the
+  way you locate it. Treat `jadx` as a readable viewer of last resort, never as the source of truth, and
+  never as the entry point of a recon. → `references/toolchain.md` §Tier 1 — dex and Java
+- **When the hot layer has no working tool here, installing one is part of the task.** A missing arm64
+  decompiler is not a constraint to route around; it is the next step. Route around it and you pay in
+  hours for a result a decompiler gives in minutes. Ask a human only when installation is genuinely
+  impossible. → `references/toolchain.md` §Closing a capability gap
+- **Name the gap before you spend against it.** State the capability the current blocker requires, and
+  whether this machine has it. This is a G2 item, not a note to yourself.
+- **Reach for a script here before writing a new one.** The kit exists precisely so that parsing,
+  hashing, alignment and hot-plug probes are not re-derived per task; a bespoke script written in place
+  of `scripts/dex_find_insn.py` is how offsets get guessed instead of computed.
+  → `references/toolchain.md` §Using the kit's scripts instead of writing your own
+
+A capability you have not checked for is not a capability you lack. Run
+`python skills/apk-reverse/scripts/doctor.py` and read what it finds **off-PATH** before concluding
+that anything is unavailable.
+
 ## Coverage — what this skill claims, and what it does not
 
 The failure this section prevents is not ignorance. It is **a confident wrong answer produced by
@@ -95,7 +124,7 @@ vocabulary and a set of reassuring numbers.
 
 **How strong these claims are:** the Measured mechanisms below were established by running the
 scripts against a real target during the verification pass recorded in
-`docs/verification-jiongnew/`. The rest are **inferred** — documented from experience, but the
+`docs/tool-verification/`. The rest are **inferred** — documented from experience, but the
 repository carries no fixture, log or sample that reproduces them (its own `long-task-discipline.md`
 reserves *observed* for a claim with an exact command and output behind it). Treat the distinction as
 load-bearing rather than cosmetic, and label your own results the same way.
@@ -120,7 +149,7 @@ virtualization, custom-linker, integrity-check-redirection and tamper-triggered-
 were **not run** against the verification target, because that target has none of those features (no
 packer, no integrity checker, ordinary application class) and its unmodified build already fails to
 start, which removes the repack-and-regress loop those scenarios need. Nothing in
-`docs/verification-jiongnew/` is evidence either way about them. If you use those documents, the
+`docs/tool-verification/` is evidence either way about them. If you use those documents, the
 claims are still on the inferred footing described above.
 
 **Scripts this pass did not run** — so they carry no measurement at all, and any conclusion drawn
@@ -187,7 +216,7 @@ unread in this repository.
 |---|---|
 | A repackaged/re-signed build **dies before your code runs**; `SIGSEGV`, all registers zero, `pc=0`, `fault addr` near `0x0` | `native-tamper-and-suicide.md` (deliberate crash), then `code-virtualization-and-custom-linkers.md` |
 | **No packer** (Application is the app's own, dex readable) **and it still dies** | `code-virtualization-and-custom-linkers.md` §a loader is still a possibility; but if the same build also dies on a *second, unrelated* device you are looking at an ordinary startup fault, not a hardened one |
-| The app dies at startup on **every** device, packed or not, **and there is no tombstone** while `crash_dump` reports `already traced` and logcat says `exited cleanly (0)` | the target's launch section in the verification record under `docs/verification-jiongnew/` — a bundled crash reporter (Sentry NDK) has taken the signal handlers, so the platform's own evidence trail is gone. Frida spawn-gating is the recovery route; it needs a working frida-server, which a disguised one may not be |
+| The app dies at startup on **every** device, packed or not, **and there is no tombstone** while `crash_dump` reports `already traced` and logcat says `exited cleanly (0)` | the target's launch section in the verification record under `docs/tool-verification/` — a bundled crash reporter (Sentry NDK) has taken the signal handlers, so the platform's own evidence trail is gone. Frida spawn-gating is the recovery route; it needs a working frida-server, which a disguised one may not be |
 | A `FORTIFY: pthread_mutex_lock called on a destroyed mutex` abort in a Flutter app, on the **main** thread, before the first frame completes | `dart-aot.md` — check `libapp.so` is actually being loaded; Flutter's engine bootstrap is the usual place a native lifecycle fault surfaces |
 | Log says a **Java-layer** signature/integrity check **passed**, yet the process dies | `code-virtualization-and-custom-linkers.md` §a Java-layer "signature killer" is a decoy |
 | Deleting a library fixes validation but yields `UnsatisfiedLinkError: dlopen failed: library "X" not found` | `code-virtualization-and-custom-linkers.md` §the deadlock that eats hours |
@@ -208,6 +237,10 @@ unread in this repository.
 | A script will not start, or a tool "is missing" | `scripts/doctor.py`, then `toolchain.md` §"not on PATH" is not "not installed" |
 | Feature-scoped network failure (login/register/pay) while the rest works | `tls-and-cert.md` — do not assume your patch caused it |
 | Everything works but **every signed request fails** after repack | `signature-derived-keys.md` |
+| A re-signed build **runs fine, renders its whole UI and logs no error — but one feature silently never loads**, and `dumpsys`/DNS/logcat show **no request for it at all** (not a rejected request: *no request*) | `code-virtualization-and-custom-linkers.md` §what the native check actually reads — a client-side integrity gate is refusing **before** the request is built. This is *not* the row above: "sent and rejected" and "never sent" have different owners and different fixes |
+| You cannot tell whether a missing feature is **your patch's fault or the target's own behaviour** | `long-task-discipline.md` §single-variable discipline. Run the **zero-change control through the same pipeline**, and the decisive variant: the unmodified original with the patch applied **in memory only**, same device, same network |
+| Under Frida `spawn`, the UI never appears — `mCurrentFocus` stays `null`, screenshots come back blank, the Activity stack never builds | `dynamic-frida.md` §spawn keeps the Activity stack down: write the patch into memory, **detach**, then start the Activity normally |
+| `frida-server` keeps disappearing mid-experiment, or the device reboots itself while you are working | `dynamic-frida.md` §when the ROM hunts your instrumentation |
 | Ads still appear after a patch that should have killed them | `server-config-and-updates.md` §6 (cached config / remote re-enable), then `ad-removal.md` §step 4 (count the SDK's own log lines; n -> 0, not "I did not see it") |
 | A forced-update or "must update" gate blocks the build | `updates-and-forced-upgrade.md` §step 6 |
 | The dialog is gone but the feature is still locked | `membership-and-limits.md` / `account-gates.md` — decide server vs client authority before patching again |
@@ -225,11 +258,17 @@ exist at the end and under what constraints (rooted or not, installable on a sto
 survive updates or not, online or offline). *Pass:* the sentence names a testable constraint, not an
 activity. *Fail:* you are solving a problem in an environment the deliverable will never see.
 
-**G2 · Environment truth.** Run `scripts/doctor.py` (and `scripts/preflight.py` if a device is in
-play). *Pass:* you know which toolchains and scripts can actually run here, and you have seen the
-environment warnings — clock skew, leftover `adb forward`/proxy, a device-side frida process already
-running, a tool installed off-PATH. *Fail:* you are about to attribute to the target a failure caused
-by your own setup.
+**G2 · Environment truth and capability inventory.** Run `scripts/doctor.py` (and `scripts/preflight.py`
+if a device is in play). *Pass:* you know which toolchains and scripts can actually run here, you have
+seen the environment warnings — clock skew, leftover `adb forward`/proxy, a device-side frida process
+already running, a tool installed off-PATH — **and you have written down the capability this target will
+demand against the capability this machine has.** Name the two or three layers the task will almost
+certainly reach (for example "arm64 native decompilation", "Dart AOT snapshot dumping", "device-side
+TLS inspection", "dex-wide cross-referencing") and mark each available / missing-but-installable /
+genuinely out of reach. *Fail:* you are about to attribute to the target a failure caused by your own
+setup — or to spend a day routing around a tool that installs in ten minutes. A layer whose tool is
+missing is a **task item**, not a constraint to design around. → `references/toolchain.md` §Closing a
+capability gap
 
 **G3 · Code location.** From the manifest and dex, answer: is there a packer, where does the app's own
 code live (dex / native / Dart / Unity / server), and is any of it virtualized to native. *Pass:* you
@@ -471,3 +510,5 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/blob_decode.py` | Decode an opaque stored value by searching the parameter space (base64/base64url/hex × rotation × deflate/zlib/gzip) instead of guessing, then re-encode an edited payload with the same parameters. |
 | `scripts/snap.py` | Bounded burst screenshot + control-tree capture, with a stall detector and an explicit verdict on whether the accessibility tree is usable at all. Use it so you *look* at the screen instead of driving blind. |
 | `scripts/sig_probe.py` | Find the exact `signatures[0].toCharsString()` value: offline candidate enumeration from an APK (`--apk`), or the authoritative value read from a live package (`--live`). Feed the result into the hardcoded constant described in `references/signature-derived-keys.md`. |
+| `scripts/spawn_patch_detach.py` | **Spawn under a Frida probe, then detach before driving the UI.** Under spawn mode the Activity stack often never comes up (`mCurrentFocus` stays `null`, screenshots blank); memory writes survive detach while hooks do not, so this ordering is what makes an in-memory patch observable. Use it whenever you need to *see* a build that only runs with a memory fix. |
+| `scripts/hook_patch_only.js` | The minimal probe for `spawn_patch_detach.py`: neutralise one native death site by offset and report `PATCHED`. Configure `MODULE_NAME`, `FILE_OFFSET`, `PATCH_BYTES`. The replacement must be an equal-length "recover the frame and return" epilogue, never a NOP in front of live code. |

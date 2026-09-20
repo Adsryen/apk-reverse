@@ -233,6 +233,11 @@ scripts/                  parameterized, path-agnostic
                               detector, and a verdict on whether the tree is usable at all
   sig_probe.py                find the exact signatures[0].toCharsString() value — offline
                               candidates from an APK, or the authoritative read from a device
+  spawn_patch_detach.py       spawn under a Frida probe, detach, then launch and capture: under
+                              spawn mode the Activity stack often never comes up, and memory
+                              writes survive detach while hooks do not
+  hook_patch_only.js          the minimal probe for spawn_patch_detach.py — neutralise one native
+                              death site by offset and report PATCHED
 ```
 
 ## Install
@@ -276,7 +281,8 @@ Linux; where a snippet is POSIX-only it is labelled. Nothing here assumes a Unix
 | Tool | Used for |
 |---|---|
 | Python 3.9+ | all scripts |
-| `ddc` (optional but recommended) | single-binary dex→Java decompiler with query subcommands (`info`, `findrefs`, `strings --with-locations`, per-class decompile). No JVM. Turns string cross-referencing from a crawl into a lookup, and reports package identity reliably — see `skills/apk-reverse/references/toolchain.md` |
+| **`droidasc`** (ASC) (**optional but strongly recommended — install this first**) | whole-APK cross-reference index: `findrefs` / `listclass` / `getclass` / `getmanifest`. One `pip install droidasc`, no JVM, no SDK, no index build. Turns "which of N thousand classes mentions this string" into a sub-second query, and it is the only route to a class whose name R8 mangled. **This is the tool an agent should reach for before any full decompile** — see `skills/apk-reverse/references/toolchain.md` §droidasc (ASC) — ask an APK "who references this?", in one query |
+| `ddc` (optional but strongly recommended) | single-binary dex→Java decompiler with query subcommands (`info`, `findrefs`, `strings --with-locations`, per-class decompile). No JVM. **Reads** what ASC **locates**; also reports package identity reliably — see `skills/apk-reverse/references/toolchain.md` §ddc — dex-to-Java with query subcommands (worth adopting) |
 | `baksmali` / `smali` + `dexlib2` jars | disassembly, assembly, surgical patching |
 | JDK (`javac`, `java`) | building/running the dexlib2 patcher; also provides `keytool`/`jarsigner` |
 | Android SDK build-tools (`aapt`, `zipalign`, `apksigner`) | manifest info, alignment, signing. **`apksigner` is the signer to use** — `jarsigner` rewrites the archive and breaks the alignment Android R+ requires |
@@ -327,7 +333,7 @@ Two qualifications that the Coverage section states in full and that belong here
   (`pp.txt`-class output). Producing that needs a snapshot-decoding decompiler — aotopsy (a static
   binary, no toolchain) or blutter (built from source, ~80 s) — and this repository does not contain
   one. It is named as a prerequisite rather than left implicit.
-- **Not every claim in this repository has a run behind it.** `docs/verification-jiongnew/` records
+- **Not every claim in this repository has a run behind it.** `docs/tool-verification/` records
   what was actually measured, on which target, and with which independent cross-check; anything not
   covered there is documented from experience and should be read as *inferred*, per this skill's own
   claim ladder.
@@ -344,7 +350,7 @@ check_refs.py      every cross-reference that names a section of another
 build_scripts.py   audit for machine-specific leftovers (absolute paths, credentials)
 ```
 
-`docs/verification-jiongnew/` is not part of the installed skill either. It is the evidence record
+`docs/tool-verification/` is not part of the installed skill either. It is the evidence record
 for one measurement pass against a real target: what each script actually did, which independent
 method confirmed it, which defects were found, and which scenarios the target could not exercise.
 It exists so the **Coverage** claims in `SKILL.md` can be checked against runs instead of trusted,

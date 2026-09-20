@@ -19,8 +19,8 @@ The two candidate splits were:
 - **by logic location** — A keeps only logic genuinely in dex; Flutter, IL2CPP, hardened dex, native
   and standalone ELF all move out. Cost: four references (~962 lines) relocate.
 
-`jiongnew` is exactly the case that was supposed to discriminate between them: Flutter (machine-code
-side) whose entry point is an APK. It produced a third answer.
+The measured target is exactly the case that was supposed to discriminate between them: Flutter
+(machine-code side) whose entry point is an APK. It produced a third answer.
 
 **The problem is not where the content lives. It is one missing dependency.** Everything the kit does
 *after* a snapshot dumper has produced `pp.txt` works correctly — the reference index, the
@@ -115,7 +115,7 @@ exercised against the real target in this pass:
   not in the repository, so the repository version is untouched.
 - `so_constpatch.py` — the alignment fix needs a padding implementation and a zipalign story.
 
-Each is recorded in `docs/verification-jiongnew/FINDINGS.md` with its root cause and the fix sketch,
+Each is recorded in `docs/tool-verification/FINDINGS.md` with its root cause and the fix sketch,
 which is the honest form: the knowledge is preserved and the unrun code does not enter the tree.
 
 ### `SKILL.md` — Coverage
@@ -149,14 +149,15 @@ places is how the two copies drift. Each one says what the other side owns.
    passed while the process dies). That belongs in A; deep native work is the other side. The new
    section points each way rather than repeating either.
 
-### `docs/verification-jiongnew/`
+### `docs/tool-verification/`
 
 New directory holding this pass's evidence record. `README.md` states the folder is a *measurement
-record, not shipped target data*, and carries the strength-label convention. It is referenced from
+record, not shipped target data*, carries the strength-label convention, and requires that **no target
+identity is recorded** — only what a future reader can apply to a different APK. It is referenced from
 `SKILL.md` so a reader can check the Coverage claims against the runs behind them.
 
-The APK is **not** in the repository (`.gitignore` already excludes `*.apk`) and no credential or
-token appears in any file.
+No APK is in the repository (`.gitignore` already excludes `*.apk`) and no credential or token
+appears in any file.
 
 ### `README.md`
 
@@ -167,8 +168,7 @@ plus a pointer to the verification record.
 
 ## Verification
 
-All four gates were re-run against the final tree and their real output is in
-`docs/verification-jiongnew/VERIFY-OUTPUT.md`:
+All four gates were re-run against the final tree:
 
 - `python -B check_repo.py`
 - `python -B check_refs.py`
