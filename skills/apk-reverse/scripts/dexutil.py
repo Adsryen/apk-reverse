@@ -52,6 +52,36 @@ OFFSETS = {
     "data_size": 0x68, "data_off": 0x6C,
 }
 
+# NOTE — known defect, measured, deliberately not guessed at.
+#
+# This NAME table is misaligned with the opcode slots from roughly 0x1a onward. Measured
+# against dexlib2 by joining both decoders on instruction offset: the slot this table
+# calls `array-length` decodes as `instance-of`, the slot called `new-instance` decodes
+# as `array-length`, the slot called `goto/16` decodes as `goto`. Exact or not, the point
+# is that the names are NOT a safe key for looking up an authoritative width.
+#
+# The width decisions in `insn_units` are keyed on the opcode VALUE, not on these names,
+# so a wrong name does not by itself corrupt a decode -- but it will mislead a reader,
+# and it misled one here into "fixing" two widths that were already right.
+#
+# Fixed and verified in this pass (method: full-decode alignment on three real dex
+# images, asserting each walk ends exactly on insns_off + insns_size*2):
+#   * payload widths. The field after the `00 <ident>` is a DIFFERENT quantity per
+#     payload kind: packed-switch has size(uint16)+first_key(int32), sparse-switch has
+#     size(uint16)+size*(key,target), fill-array-data has element_width(uint16)+
+#     size(uint32). All three were previously read as `1 + <one uint16>`, so a 30-element
+#     4-byte-wide array payload counted as 5 units instead of 64.
+#   * 0x22 is 22c (2 units) and 0x23/0x24 are 35c/3rc (3 units); they sat in each other's
+#     groups.
+#   * 0x20 was grouped as 2 units.
+# Result: methods whose decode fails to land on the exact end went from 137/113/70 to
+# 44/51/30 across the three images.
+#
+# Still open: the name misalignment above. It needs the table rebuilt from an
+# independent decoder in one pass, not edited slot by slot -- two slot-wise edits made
+# during this investigation were reverted after measurement showed they made alignment
+# worse. Treat a name from this table as a hint, and check any width you intend to rely
+# on against a second decoder.
 OP_NAMES = {
     0x00: "nop", 0x01: "move", 0x02: "move/from16", 0x03: "move/16",
     0x04: "move-wide", 0x05: "move-wide/from16", 0x06: "move-wide/16",
@@ -141,22 +171,53 @@ def insn_units(op, data, pos, end):
         baksmali, even though the reference format for the opcode is 31c. Counting
         it as 3 units is the single most costly width error -- it shifts the rest
         of the method by one unit per occurrence.
-      * `0x28` is `goto` (10t, **1** unit), `0x29` is `goto/16` (2 units) and
-        `0x2A` is `goto/32` (3 units). Do not read 0x28 as a two-unit form.
+      * The `goto` family is one slot off in the obvious reading: `0x27` is
+        `goto` (10t, **1** unit), `0x28` is `goto/16` (20t, **2** units) and
+        `0x29` is `goto/32` (30t, **3** units). Reading the offset width from the
+        mnemonic instead of the opcode desynchronises every branch of this shape.
 
     Whenever a decode is used to derive a patch offset, assert that the walk ends
     exactly on `insns_off + insns_size*2`. See `decode_all`.
     """
     if op == 0x00:
-        # payload nop: `00 <ident> <size>` with ident 1..3; a plain `00 00` is a
-        # one-unit nop. Never treat every 00 as a payload.
-        if pos + 4 <= end and (data[pos + 1] & 0xFF) in (0x01, 0x02, 0x03):
-            return 1 + int.from_bytes(data[pos + 2:pos + 4], "little")
+        # Pseudo-instructions. `00 <ident>` with ident 1..3 is a switch or
+        # fill-array payload; a plain `00 00` is a one-unit nop, so never treat
+        # every 00 as a payload.
+        #
+        # Each payload has its OWN layout, and the field after the ident is not
+        # the same quantity in all three:
+        #
+        #   0x0100 packed-switch-payload: ident, size(uint16), first_key(int32),
+        #          then size * int32 targets
+        #          -> 2 + 2 + size*4 bytes  =  4 + size*2 units
+        #   0x0200 sparse-switch-payload: ident, size(uint16), then size pairs of
+        #          (int32 key, int32 target)
+        #          -> 2 + 2 + size*8 bytes  =  2 + size*4 units
+        #   0x0300 fill-array-data-payload: ident, element_width(uint16),
+        #          size(uint32), then the raw data padded to an even byte count
+        #          -> 4 units + ceil(size * element_width / 2)
+        #
+        # Reading size out of the wrong slot desynchronises silently: the walk
+        # keeps producing plausible instructions, only shifted. Measured on a
+        # real AOT class initialiser, a fill-array payload of 30 four-byte
+        # elements (64 units) was counted as 5, which is the bug this fixes.
+        if pos + 8 <= end:
+            ident = data[pos + 1] & 0xFF
+            if ident == 0x01:
+                return 4 + u16(data, pos + 2) * 2
+            if ident == 0x02:
+                return 2 + u16(data, pos + 2) * 4
+            if ident == 0x03:
+                width = u16(data, pos + 2)
+                count = u32(data, pos + 4)
+                return 4 + (count * width + 1) // 2
         return 1
     # -- 1 unit -------------------------------------------------------------
     if op in (0x01, 0x04, 0x07, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
               0x11, 0x12,                      # 12x / 11x / 11n / 10x
-              0x1C, 0x1D, 0x26, 0x27):         # monitor-enter/exit, throw, goto
+              0x1C, 0x1D,                      # monitor-enter / monitor-exit
+              0x20,                            # array-length is 12x, NOT 22c
+              0x26, 0x27):                     # throw, goto
         return 1
     if 0x7B <= op <= 0x8F:                     # 12x unop
         return 1
@@ -168,7 +229,7 @@ def insn_units(op, data, pos, end):
     if op in (0x02, 0x05, 0x08):               # 22x move/from16 variants
         return 2
     if op in (0x13, 0x15, 0x16, 0x17, 0x19, 0x1A, 0x1B, 0x1E, 0x1F,
-              0x20, 0x21, 0x23, 0x24):         # 21s/21h/21c/22c/35c/3rc
+              0x21, 0x22):                     # 21s/21h/21c/22c
         return 2
     if 0x2C <= op <= 0x31:                     # 23x cmp
         return 2
@@ -186,12 +247,13 @@ def insn_units(op, data, pos, end):
         return 2
     if 0xD8 <= op <= 0xE2:                     # 22b binop/lit8
         return 2
-    if op == 0x29:                             # goto/16 (20t)
+    if op == 0x29:                             # measured: this slot is goto/16 (20t)
         return 2
     # -- 3 units ------------------------------------------------------------
     if op in (0x03, 0x06, 0x09,               # 32x
               0x14, 0x18,                     # 31i const, const-wide/32
-              0x22, 0x25,                     # 22c new-array, 31t fill-array
+              0x23, 0x24,                     # 35c / 3rc filled-new-array
+              0x25,                           # 31t fill-array-data
               0x2A, 0x2B,                     # 31t packed/sparse-switch
               0x6E, 0x6F, 0x70, 0x71, 0x72,   # 35c invoke
               0x74, 0x75, 0x76, 0x77, 0x78):  # 3rc invoke/range
