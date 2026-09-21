@@ -64,8 +64,8 @@ _KIND_MAP = {
     "move-result": MOVE_RESULT_OPS,
     "const4": (0x12,),
     "const16": (0x13,),
-    "goto": (0x27, 0x28, 0x29),
-    "switch": (0x2A, 0x2B),
+    "goto": (0x28, 0x29, 0x2A),
+    "switch": (0x2B, 0x2C),
     "nop": (0x00,),
 }
 _FIELD_READ = tuple(range(0x52, 0x59))

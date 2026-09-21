@@ -84,37 +84,129 @@ OFFSETS = {
 # on against a second decoder.
 OP_NAMES = {
     0x00: "nop", 0x01: "move", 0x02: "move/from16", 0x03: "move/16",
-    0x04: "move-wide", 0x05: "move-wide/from16", 0x06: "move-wide/16",
-    0x07: "move-object", 0x08: "move-object/from16", 0x09: "move-object/16",
-    0x0A: "move-result", 0x0B: "move-result-wide", 0x0C: "move-result-object",
-    0x0D: "move-exception", 0x0E: "return-void", 0x0F: "return",
-    0x10: "return-wide", 0x11: "return-object", 0x12: "const/4",
-    0x13: "const/16", 0x14: "const", 0x15: "const/high16",
-    0x16: "const-wide/high16", 0x17: "const-wide/16", 0x18: "const-wide/32",
-    0x19: "const-string", 0x1A: "const-string/jumbo", 0x1B: "const-class",
-    0x1C: "monitor-enter", 0x1D: "monitor-exit", 0x1E: "check-cast",
-    0x1F: "instance-of", 0x20: "array-length", 0x21: "new-instance",
-    0x22: "new-array", 0x23: "filled-new-array", 0x24: "filled-new-array/range",
-    0x25: "fill-array-data", 0x26: "throw", 0x27: "goto",
-    0x28: "goto/16", 0x29: "goto/32", 0x2A: "packed-switch",
-    0x2B: "sparse-switch",
-    0x32: "if-eq", 0x33: "if-ne", 0x34: "if-lt", 0x35: "if-ge",
-    0x36: "if-gt", 0x37: "if-le",
+    0x04: "move-wide", 0x05: "move-wide/from16", 0x06: "move-wide/16", 0x07: "move-object",
+    0x08: "move-object/from16", 0x09: "move-object/16", 0x0A: "move-result", 0x0B: "move-result-wide",
+    0x0C: "move-result-object", 0x0D: "move-exception", 0x0E: "return-void", 0x0F: "return",
+    0x10: "return-wide", 0x11: "return-object", 0x12: "const/4", 0x13: "const/16",
+    0x14: "const", 0x15: "const/high16", 0x16: "const-wide/16", 0x17: "const-wide/32",
+    0x18: "const-wide", 0x19: "const-wide/high16", 0x1A: "const-string", 0x1B: "const-string/jumbo",
+    0x1C: "const-class", 0x1D: "monitor-enter", 0x1E: "monitor-exit", 0x1F: "check-cast",
+    0x20: "instance-of", 0x21: "array-length", 0x22: "new-instance", 0x23: "new-array",
+    0x24: "filled-new-array", 0x25: "filled-new-array/range", 0x26: "fill-array-data", 0x27: "throw",
+    0x28: "goto", 0x29: "goto/16", 0x2A: "goto/32", 0x2B: "packed-switch",
+    0x2C: "sparse-switch", 0x2D: "cmpl-float", 0x2E: "cmpg-float", 0x2F: "cmpl-double",
+    0x30: "cmpg-double", 0x31: "cmp-long", 0x32: "if-eq", 0x33: "if-ne",
+    0x34: "if-lt", 0x35: "if-ge", 0x36: "if-gt", 0x37: "if-le",
     0x38: "if-eqz", 0x39: "if-nez", 0x3A: "if-ltz", 0x3B: "if-gez",
-    0x3C: "if-gtz", 0x3D: "if-lez",
+    0x3C: "if-gtz", 0x3D: "if-lez", 0x44: "aget", 0x45: "aget-wide",
+    0x46: "aget-object", 0x47: "aget-boolean", 0x48: "aget-byte", 0x49: "aget-char",
+    0x4A: "aget-short", 0x4B: "aput", 0x4C: "aput-wide", 0x4D: "aput-object",
+    0x4E: "aput-boolean", 0x4F: "aput-byte", 0x50: "aput-char", 0x51: "aput-short",
     0x52: "iget", 0x53: "iget-wide", 0x54: "iget-object", 0x55: "iget-boolean",
-    0x56: "iget-byte", 0x57: "iget-char", 0x58: "iget-short",
-    0x59: "iput", 0x5A: "iput-wide", 0x5B: "iput-object", 0x5C: "iput-boolean",
-    0x5D: "iput-byte", 0x5E: "iput-char", 0x5F: "iput-short",
-    0x60: "sget", 0x61: "sget-wide", 0x62: "sget-object", 0x63: "sget-boolean",
-    0x64: "sget-byte", 0x65: "sget-char", 0x66: "sget-short",
-    0x67: "sput", 0x68: "sput-wide", 0x69: "sput-object", 0x6A: "sput-boolean",
-    0x6B: "sput-byte", 0x6C: "sput-char", 0x6D: "sput-short",
-    0x6E: "invoke-virtual", 0x6F: "invoke-super", 0x70: "invoke-direct",
-    0x71: "invoke-static", 0x72: "invoke-interface",
-    0x74: "invoke-virtual/range", 0x75: "invoke-super/range",
-    0x76: "invoke-direct/range", 0x77: "invoke-static/range",
-    0x78: "invoke-interface/range",
+    0x56: "iget-byte", 0x57: "iget-char", 0x58: "iget-short", 0x59: "iput",
+    0x5A: "iput-wide", 0x5B: "iput-object", 0x5C: "iput-boolean", 0x5D: "iput-byte",
+    0x5E: "iput-char", 0x5F: "iput-short", 0x60: "sget", 0x61: "sget-wide",
+    0x62: "sget-object", 0x63: "sget-boolean", 0x64: "sget-byte", 0x65: "sget-char",
+    0x66: "sget-short", 0x67: "sput", 0x68: "sput-wide", 0x69: "sput-object",
+    0x6A: "sput-boolean", 0x6B: "sput-byte", 0x6C: "sput-char", 0x6D: "sput-short",
+    0x6E: "invoke-virtual", 0x6F: "invoke-super", 0x70: "invoke-direct", 0x71: "invoke-static",
+    0x72: "invoke-interface", 0x74: "invoke-virtual/range", 0x75: "invoke-super/range", 0x76: "invoke-direct/range",
+    0x77: "invoke-static/range", 0x78: "invoke-interface/range", 0x7B: "neg-int", 0x7C: "not-int",
+    0x7D: "neg-long", 0x7E: "not-long", 0x7F: "neg-float", 0x80: "neg-double",
+    0x81: "int-to-long", 0x82: "int-to-float", 0x83: "int-to-double", 0x84: "long-to-int",
+    0x85: "long-to-float", 0x86: "long-to-double", 0x87: "float-to-int", 0x88: "float-to-long",
+    0x89: "float-to-double", 0x8A: "double-to-int", 0x8B: "double-to-long", 0x8C: "double-to-float",
+    0x8D: "int-to-byte", 0x8E: "int-to-char", 0x8F: "int-to-short", 0x90: "add-int",
+    0x91: "sub-int", 0x92: "mul-int", 0x93: "div-int", 0x94: "rem-int",
+    0x95: "and-int", 0x96: "or-int", 0x97: "xor-int", 0x98: "shl-int",
+    0x99: "shr-int", 0x9A: "ushr-int", 0x9B: "add-long", 0x9C: "sub-long",
+    0x9D: "mul-long", 0x9E: "div-long", 0x9F: "rem-long", 0xA0: "and-long",
+    0xA1: "or-long", 0xA2: "xor-long", 0xA3: "shl-long", 0xA4: "shr-long",
+    0xA5: "ushr-long", 0xA6: "add-float", 0xA7: "sub-float", 0xA8: "mul-float",
+    0xA9: "div-float", 0xAA: "rem-float", 0xAB: "add-double", 0xAC: "sub-double",
+    0xAD: "mul-double", 0xAE: "div-double", 0xAF: "rem-double", 0xB0: "add-int/2addr",
+    0xB1: "sub-int/2addr", 0xB2: "mul-int/2addr", 0xB3: "div-int/2addr", 0xB4: "rem-int/2addr",
+    0xB5: "and-int/2addr", 0xB6: "or-int/2addr", 0xB7: "xor-int/2addr", 0xB8: "shl-int/2addr",
+    0xB9: "shr-int/2addr", 0xBA: "ushr-int/2addr", 0xBB: "add-long/2addr", 0xBC: "sub-long/2addr",
+    0xBD: "mul-long/2addr", 0xBE: "div-long/2addr", 0xBF: "rem-long/2addr", 0xC0: "and-long/2addr",
+    0xC1: "or-long/2addr", 0xC2: "xor-long/2addr", 0xC3: "shl-long/2addr", 0xC4: "shr-long/2addr",
+    0xC5: "ushr-long/2addr", 0xC6: "add-float/2addr", 0xC7: "sub-float/2addr", 0xC8: "mul-float/2addr",
+    0xC9: "div-float/2addr", 0xCA: "rem-float/2addr", 0xCB: "add-double/2addr", 0xCC: "sub-double/2addr",
+    0xCD: "mul-double/2addr", 0xCE: "div-double/2addr", 0xCF: "rem-double/2addr", 0xD0: "add-int/lit16",
+    0xD1: "rsub-int", 0xD2: "mul-int/lit16", 0xD3: "div-int/lit16", 0xD4: "rem-int/lit16",
+    0xD5: "and-int/lit16", 0xD6: "or-int/lit16", 0xD7: "xor-int/lit16", 0xD8: "add-int/lit8",
+    0xD9: "rsub-int/lit8", 0xDA: "mul-int/lit8", 0xDB: "div-int/lit8", 0xDC: "rem-int/lit8",
+    0xDD: "and-int/lit8", 0xDE: "or-int/lit8", 0xDF: "xor-int/lit8", 0xE0: "shl-int/lit8",
+    0xE1: "shr-int/lit8", 0xE2: "ushr-int/lit8", 0xFA: "invoke-polymorphic", 0xFB: "invoke-polymorphic/range",
+    0xFC: "invoke-custom", 0xFD: "invoke-custom/range", 0xFE: "const-method-handle", 0xFF: "const-method-type",
+}
+
+# Instruction length in 16-bit code units, one entry per valid opcode.
+#
+# Keyed by opcode from the format specification, NOT inferred from a mnemonic
+# and NOT copied from a run of neighbours. 0x16-0x2C alternates
+# 2,3,5,2,2,3,2,1,1,2,2,1,2,2,3,3,3,1,1,2,3,3,3 -- an entire run where the
+# plausible-looking "same family, same width" assumption is wrong at nine
+# opcodes. A single wrong entry shifts every instruction after it in the same
+# method, and the decode keeps producing plausible instructions, so nothing
+# looks broken until an operand index walks off its table.
+OP_UNITS = {
+    0x00: 1, 0x01: 1, 0x02: 2, 0x03: 3,
+    0x04: 1, 0x05: 2, 0x06: 3, 0x07: 1,
+    0x08: 2, 0x09: 3, 0x0A: 1, 0x0B: 1,
+    0x0C: 1, 0x0D: 1, 0x0E: 1, 0x0F: 1,
+    0x10: 1, 0x11: 1, 0x12: 1, 0x13: 2,
+    0x14: 3, 0x15: 2, 0x16: 2, 0x17: 3,
+    0x18: 5, 0x19: 2, 0x1A: 2, 0x1B: 3,
+    0x1C: 2, 0x1D: 1, 0x1E: 1, 0x1F: 2,
+    0x20: 2, 0x21: 1, 0x22: 2, 0x23: 2,
+    0x24: 3, 0x25: 3, 0x26: 3, 0x27: 1,
+    0x28: 1, 0x29: 2, 0x2A: 3, 0x2B: 3,
+    0x2C: 3, 0x2D: 2, 0x2E: 2, 0x2F: 2,
+    0x30: 2, 0x31: 2, 0x32: 2, 0x33: 2,
+    0x34: 2, 0x35: 2, 0x36: 2, 0x37: 2,
+    0x38: 2, 0x39: 2, 0x3A: 2, 0x3B: 2,
+    0x3C: 2, 0x3D: 2, 0x44: 2, 0x45: 2,
+    0x46: 2, 0x47: 2, 0x48: 2, 0x49: 2,
+    0x4A: 2, 0x4B: 2, 0x4C: 2, 0x4D: 2,
+    0x4E: 2, 0x4F: 2, 0x50: 2, 0x51: 2,
+    0x52: 2, 0x53: 2, 0x54: 2, 0x55: 2,
+    0x56: 2, 0x57: 2, 0x58: 2, 0x59: 2,
+    0x5A: 2, 0x5B: 2, 0x5C: 2, 0x5D: 2,
+    0x5E: 2, 0x5F: 2, 0x60: 2, 0x61: 2,
+    0x62: 2, 0x63: 2, 0x64: 2, 0x65: 2,
+    0x66: 2, 0x67: 2, 0x68: 2, 0x69: 2,
+    0x6A: 2, 0x6B: 2, 0x6C: 2, 0x6D: 2,
+    0x6E: 3, 0x6F: 3, 0x70: 3, 0x71: 3,
+    0x72: 3, 0x74: 3, 0x75: 3, 0x76: 3,
+    0x77: 3, 0x78: 3, 0x7B: 1, 0x7C: 1,
+    0x7D: 1, 0x7E: 1, 0x7F: 1, 0x80: 1,
+    0x81: 1, 0x82: 1, 0x83: 1, 0x84: 1,
+    0x85: 1, 0x86: 1, 0x87: 1, 0x88: 1,
+    0x89: 1, 0x8A: 1, 0x8B: 1, 0x8C: 1,
+    0x8D: 1, 0x8E: 1, 0x8F: 1, 0x90: 2,
+    0x91: 2, 0x92: 2, 0x93: 2, 0x94: 2,
+    0x95: 2, 0x96: 2, 0x97: 2, 0x98: 2,
+    0x99: 2, 0x9A: 2, 0x9B: 2, 0x9C: 2,
+    0x9D: 2, 0x9E: 2, 0x9F: 2, 0xA0: 2,
+    0xA1: 2, 0xA2: 2, 0xA3: 2, 0xA4: 2,
+    0xA5: 2, 0xA6: 2, 0xA7: 2, 0xA8: 2,
+    0xA9: 2, 0xAA: 2, 0xAB: 2, 0xAC: 2,
+    0xAD: 2, 0xAE: 2, 0xAF: 2, 0xB0: 1,
+    0xB1: 1, 0xB2: 1, 0xB3: 1, 0xB4: 1,
+    0xB5: 1, 0xB6: 1, 0xB7: 1, 0xB8: 1,
+    0xB9: 1, 0xBA: 1, 0xBB: 1, 0xBC: 1,
+    0xBD: 1, 0xBE: 1, 0xBF: 1, 0xC0: 1,
+    0xC1: 1, 0xC2: 1, 0xC3: 1, 0xC4: 1,
+    0xC5: 1, 0xC6: 1, 0xC7: 1, 0xC8: 1,
+    0xC9: 1, 0xCA: 1, 0xCB: 1, 0xCC: 1,
+    0xCD: 1, 0xCE: 1, 0xCF: 1, 0xD0: 2,
+    0xD1: 2, 0xD2: 2, 0xD3: 2, 0xD4: 2,
+    0xD5: 2, 0xD6: 2, 0xD7: 2, 0xD8: 2,
+    0xD9: 2, 0xDA: 2, 0xDB: 2, 0xDC: 2,
+    0xDD: 2, 0xDE: 2, 0xDF: 2, 0xE0: 2,
+    0xE1: 2, 0xE2: 2, 0xFA: 4, 0xFB: 4,
+    0xFC: 3, 0xFD: 3, 0xFE: 2, 0xFF: 2,
 }
 
 # Opcode groups whose operands are a pair of registers plus an int16 offset.
@@ -159,22 +251,24 @@ def read_uleb(b, o):
 def insn_units(op, data, pos, end):
     """Instruction length in 16-bit code units.
 
-    One wrong width desynchronises everything after it, and the failure is quiet:
-    the decode keeps producing plausible-looking instructions, just shifted, so
-    every offset you derive from that point is wrong. Two width traps are common
-    enough to call out:
+    Widths come from OP_UNITS, the format specification's table -- not from a
+    mnemonic, and not from a run of neighbours. The failure that replaces was
+    quiet in the worst way: a wrong width keeps producing plausible instructions,
+    just shifted, so every offset derived after that point is wrong and nothing in
+    the output says so. The traps worth naming:
 
-      * `0x32`-`0x3D` (if-test 22t / if-testz 21t) are **2** units, not 1. Treating
-        them as 1 invents a fake second instruction at every branch.
-      * `0x1A` (const-string/jumbo) is emitted as a **4-byte** form (op, register,
-        uint16 string index) by real toolchains and read that way by ART and
-        baksmali, even though the reference format for the opcode is 31c. Counting
-        it as 3 units is the single most costly width error -- it shifts the rest
-        of the method by one unit per occurrence.
-      * The `goto` family is one slot off in the obvious reading: `0x27` is
-        `goto` (10t, **1** unit), `0x28` is `goto/16` (20t, **2** units) and
-        `0x29` is `goto/32` (30t, **3** units). Reading the offset width from the
-        mnemonic instead of the opcode desynchronises every branch of this shape.
+      * Width is not a family property. `const-wide/16` (0x16) is 2 units,
+        `const-wide/32` (0x17) is 3 and `const-wide` (0x18) is 5; `const-class`
+        (0x1C) is 2 while `monitor-exit` (0x1E) is 1; `instance-of` (0x20) is 2
+        while `array-length` (0x21) is 1. Nine opcodes in 0x16-0x2C break the
+        "same family, same width" reading.
+      * `0x32`-`0x3D` (if-test 22t / if-testz 21t) are **2** units, not 1.
+        Treating them as 1 invents a fake second instruction at every branch.
+      * `0x1A` (const-string, 21c) and `0x1B` (const-string/jumbo, 31c) are
+        different widths; only the jumbo form carries a 32-bit string index.
+      * The `goto` family sits at `0x28` (10t, **1** unit), `0x29` (20t, **2**)
+        and `0x2A` (30t, **3**) -- one slot later than the obvious reading, which
+        puts `throw`, `goto`, `goto/16` at 0x27/0x28/0x29.
 
     Whenever a decode is used to derive a patch offset, assert that the walk ends
     exactly on `insns_off + insns_size*2`. See `decode_all`.
@@ -212,54 +306,10 @@ def insn_units(op, data, pos, end):
                 count = u32(data, pos + 4)
                 return 4 + (count * width + 1) // 2
         return 1
-    # -- 1 unit -------------------------------------------------------------
-    if op in (0x01, 0x04, 0x07, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
-              0x11, 0x12,                      # 12x / 11x / 11n / 10x
-              0x1C, 0x1D,                      # monitor-enter / monitor-exit
-              0x20,                            # array-length is 12x, NOT 22c
-              0x26, 0x27):                     # throw, goto
-        return 1
-    if 0x7B <= op <= 0x8F:                     # 12x unop
-        return 1
-    if 0xB0 <= op <= 0xCF:                     # 12x binop/2addr
-        return 1
-    if 0xE3 <= op <= 0xFC:                     # 10x family
-        return 1
-    # -- 2 units ------------------------------------------------------------
-    if op in (0x02, 0x05, 0x08):               # 22x move/from16 variants
-        return 2
-    if op in (0x13, 0x15, 0x16, 0x17, 0x19, 0x1A, 0x1B, 0x1E, 0x1F,
-              0x21, 0x22):                     # 21s/21h/21c/22c
-        return 2
-    if 0x2C <= op <= 0x31:                     # 23x cmp
-        return 2
-    if op in IF_TEST or op in IF_TESTZ:        # 22t / 21t  <-- 2, not 1
-        return 2
-    if 0x44 <= op <= 0x51:                     # 23x aget/aput
-        return 2
-    if 0x52 <= op <= 0x5F:                     # 22c iget/iput
-        return 2
-    if 0x60 <= op <= 0x6D:                     # 21c sget/sput
-        return 2
-    if 0x90 <= op <= 0xAF:                     # 23x binop
-        return 2
-    if 0xD0 <= op <= 0xD7:                     # 22s binop/lit16
-        return 2
-    if 0xD8 <= op <= 0xE2:                     # 22b binop/lit8
-        return 2
-    if op == 0x29:                             # measured: this slot is goto/16 (20t)
-        return 2
-    # -- 3 units ------------------------------------------------------------
-    if op in (0x03, 0x06, 0x09,               # 32x
-              0x14, 0x18,                     # 31i const, const-wide/32
-              0x23, 0x24,                     # 35c / 3rc filled-new-array
-              0x25,                           # 31t fill-array-data
-              0x2A, 0x2B,                     # 31t packed/sparse-switch
-              0x6E, 0x6F, 0x70, 0x71, 0x72,   # 35c invoke
-              0x74, 0x75, 0x76, 0x77, 0x78):  # 3rc invoke/range
-        return 3
-    # -- payloads / unknown -------------------------------------------------
-    return 1
+    # Unallocated opcodes (0x3E-0x43, 0x73, 0x79-0x7A, 0xE3-0xF9) never appear in
+    # a valid dex; anything unlisted is treated as one unit so a corrupt stream
+    # still terminates rather than running off the end.
+    return OP_UNITS.get(op, 1)
 
 
 class Dex(object):
@@ -347,7 +397,17 @@ class Dex(object):
         cd = self.find_class(fqcn)
         if cd is None:
             raise KeyError("class not found: %s" % fqcn)
-        p = u32(self.d, cd + 24)
+        for item in self.methods_at(cd):
+            yield item
+
+    def methods_at(self, class_def_off):
+        """Same as methods_of(), from a class_def_item offset you already have.
+
+        methods_of() calls find_class(), which is a linear scan of class_defs, so
+        walking every class in a dex through it costs O(n^2). A caller that is
+        already iterating class_defs should come through here instead.
+        """
+        p = u32(self.d, class_def_off + 24)
         if p == 0:
             return
         sf, p = read_uleb(self.d, p)
@@ -441,14 +501,14 @@ class Dex(object):
         op, pos, raw = insn["op"], insn["off"], insn["raw"]
         if op in IF_TEST or op in IF_TESTZ:
             return pos + s16(u16(self.d, pos + 2)) * 2
-        if op == 0x27:                       # goto (10t, signed byte)
+        if op == 0x28:                       # goto (10t, signed byte)
             off = raw[1]
             if off > 127:
                 off -= 256
             return pos + off * 2
-        if op == 0x28:
+        if op == 0x29:                       # goto/16 (20t, signed int16)
             return pos + s16(u16(self.d, pos + 2)) * 2
-        if op == 0x29:
+        if op == 0x2A:                       # goto/32 (30t, signed int32)
             off = u32(self.d, pos + 2)
             if off > 0x7FFFFFFF:
                 off -= 0x100000000
@@ -482,7 +542,7 @@ class Dex(object):
                                           self.branch_target(insn))
         elif op in IF_TESTZ:
             text += " v%d -> 0x%x" % (raw[1] & 0xF, self.branch_target(insn))
-        elif op in (0x27, 0x28, 0x29):
+        elif op in (0x28, 0x29, 0x2A):
             text += " -> 0x%x" % self.branch_target(insn)
         elif op in IFIELD_OPS:
             cls, nm, ty = self.field(u16(self.d, pos + 2))
@@ -496,10 +556,13 @@ class Dex(object):
         elif op in INVOKE_OPS:
             cls, nm, ds = self.method(u16(self.d, pos + 2))
             text += " %s.%s%s" % (cls, nm, ds)
-        elif op in (0x19, 0x1A):
-            # Both forms carry the string index as a uint16 at byte offset 2.
-            # Reading a uint32 here gives a huge index that walks off the table.
+        elif op == 0x1A:
+            # const-string (21c): uint16 string index at byte offset 2.
             text += ' "%s"' % self.string_safe(u16(self.d, pos + 2))
+        elif op == 0x1B:
+            # const-string/jumbo (31c): the index is a uint32, so reading it as a
+            # uint16 would silently name a different string.
+            text += ' "%s"' % self.string_safe(u32(self.d, pos + 2))
         elif op == 0x12:
             lit = raw[1] & 0xF
             text += " v%d, %d" % (raw[1] >> 4, lit - 16 if lit > 7 else lit)
@@ -634,9 +697,10 @@ def _max_reg(insn):
         return raw[1] & 0xF
     if op == 0x12:
         return raw[1] >> 4
-    if op in (0x01, 0x04, 0x07, 0x0A, 0x0B, 0x0C, 0x0D, 0x0F, 0x10, 0x11,
-              0x1C, 0x1D, 0x1E):
-        return raw[1] & 0xF
+    if op in (0x01, 0x04, 0x07, 0x0F, 0x10, 0x11):
+        return raw[1] & 0xF          # 12x: two 4-bit registers
+    if op in (0x0A, 0x0B, 0x0C, 0x0D, 0x1C, 0x1D, 0x1E, 0x1F, 0x22):
+        return raw[1]                # 11x / 21c: one 8-bit register
     return 0
 
 
