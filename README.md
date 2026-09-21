@@ -77,11 +77,9 @@ measurements.
 - Deciding **what the deliverable should be when an APK is not an option** — a repack refused by
   several independent checks is *blocked*, not expensive, and the fallback ladder is a system-level
   module, a local RPC service, or an honest report with a stated boundary.
-- Telling a **real memory dump from an extraction-shell skeleton** — and knowing that the
-  trivial-body ratio is *bimodal rather than a threshold*: it reads ~100% for a bare `return-void`
-  skeleton, but is blind to nop-cleared bodies, throw stubs and partial extraction, which are the
-  shapes real shells actually use. Then knowing which recovery route applies, including the root-side
-  dump for when `frida` itself is refused by the target.
+- Telling a **real memory dump from an extraction-shell skeleton**, and knowing which recovery route
+  applies — including the root-side dump for when `frida` itself is refused. What the measurement can
+  and cannot see is in `skills/apk-reverse/references/advanced-unpacking.md`.
 - **Calling a routine instead of reversing it** when reversing costs more than invoking: emulated
   execution on the host, or a live function service-ified over Frida RPC.
 - Reading **instruction-level execution evidence** when a native function has been flattened into a
@@ -94,8 +92,7 @@ measurements.
 - Working **from the phone itself**: MT Manager's edit/repack/sign flow and its APK MCP surface,
   LSPosed Manager, and on-device data inspection, alongside the PC toolchain rather than instead of it.
 - Telling **Java2C apart from an extraction shell** before spending hours hunting a decrypted DEX that
-  does not exist at any point in the process lifetime — the code was compiled into a `.so`, and the
-  shapes are separated by a measured native-density difference of roughly 2000x, not by intuition.
+  does not exist at any point in the process lifetime — the code was compiled into a `.so`.
 - Handling a build that arrives as a **split APK / App Bundle set**: reading the set off a device,
   signing every member with one keystore for `pm install-multiple`, or merging code/native members
   into a standalone APK when that is legal.
@@ -426,14 +423,13 @@ provably out of reach, and **on-device tooling**. A **benchmark pass** then put 
 targets under those routes (`tests/benchmark.md`): it added **Java2C discrimination** (the
 misdiagnosis that sends an agent hunting a decrypted DEX that never exists), **split APK /
 App Bundle handling**, **schema-free protobuf decoding**, a **Dex-VMP differential** harness,
-and **kernel-module templates with their version gates** — and it corrected two earlier
-claims, replacing the trivial-body *threshold* with a measured bimodal result and reopening
-a VMP verdict that a hand-written opcode table had got wrong. Unity/IL2CPP logic recovery,
+and **kernel-module templates with their version gates** — and it corrected two earlier claims
+whose measurements disagreed with them. Unity/IL2CPP logic recovery,
 React Native/Hermes bytecode internals, and defeating a server-side authority are **not**
 covered, and the skill is written to say so and stop rather than apply the nearest
 documented procedure to a target it was not written for.
 
-Three qualifications that the Coverage section states in full and that belong here too:
+Four qualifications that the Coverage section states in full and that belong here too:
 
 - **Flutter/Dart AOT analysis has a dependency.** The workflow begins at a pool listing
   (`pp.txt`-class output). Producing that needs a snapshot-decoding decompiler — aotopsy (a static
@@ -454,15 +450,23 @@ Three qualifications that the Coverage section states in full and that belong he
 
 ## Repository maintenance
 
-Three tools live at the root and are not part of the installed skill:
+Four tools live at the root and are not part of the installed skill:
 
 ```
 check_repo.py      every skill discovered, frontmatter valid, scripts runnable,
                    documented paths resolve, README paths explicit and existing
 check_refs.py      every cross-reference that names a section of another
                    document reaches a real heading in that document
+check_budget.py    keep the always-loaded part from creeping: narrative lines in
+                   SKILL.md (index lines counted separately, because one line per
+                   bundled file is the price of discoverability), index-row length,
+                   and conclusions restated outside their legitimate homes
 build_scripts.py   audit for machine-specific leftovers (absolute paths, credentials)
 ```
+
+Consistency has a natural counter-pressure -- a broken path fails loudly, and someone fixes it.
+Bloat has none, which is why the third tool exists: every pass adds a reference, an index row and
+a coverage claim, and without a measurement nothing in the repository notices.
 
 `tests/benchmark.md` holds the **regression matrix**: dimension -> public target -> the scripts the
 row exercises -> measured result -> strength label. It is the checklist to re-run before trusting
