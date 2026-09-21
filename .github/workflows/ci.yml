@@ -1,0 +1,86 @@
+# CI for the apk-reverse skill repository.
+#
+# WHAT THIS RUNS
+#   * the repository's own structural gates: check_repo.py, check_refs.py,
+#     check_budget.py, check_routing.py, and check_commands.py when it is present
+#   * the pytest suite: tests/unit, tests/cli, tests/integration
+#
+# WHAT THIS DOES NOT RUN, ON PURPOSE
+#   * anything needing a device, adb, frida, a rooted phone, a network peer or a
+#     real sample APK. Those routes are recorded experiments in tests/benchmark.md
+#     and their status is documented in
+#     docs/tool-verification/EXTENSION-test-harness.md.
+#   * anything about agent behaviour. Whether a model routes, classifies or
+#     refuses correctly is not observable from a unit test; skills/apk-reverse/
+#     evals/evals.json is the skeleton for that, and it has never been executed.
+#   * the dex_patch_bytes regression hash. Its input lives in git-ignored
+#     tools/_work/bench/, so that test self-skips here with a printed reason
+#     rather than failing. Run it locally after downloading the sample.
+#
+# Coverage is therefore: static structure, documentation anchors, budget, command
+# references, pure parsers, CLI contracts and no-device flows. Nothing more is
+# claimed.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: "1"
+      # The gates spawn sibling scripts and decode their output. On a Windows
+      # runner the default codec is the console's (GBK here), and one script's
+      # --help text is not GBK-decodable, which is reported as a crash in that
+      # script rather than as a harness decoding problem. Pinning UTF-8 removes
+      # the whole class of failure on every platform.
+      PYTHONUTF8: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Structural gate - repository layout
+        run: python check_repo.py
+
+      - name: Structural gate - documentation anchors
+        run: python check_refs.py
+
+      - name: Structural gate - context budget
+        run: python check_budget.py
+
+      - name: Structural gate - documented commands (if present)
+        run: |
+          if [ -f check_commands.py ]; then
+            python check_commands.py
+          else
+            echo "check_commands.py is not present in this revision; skipping."
+          fi
+
+      - name: Structural gate - routing inventory matches the entry point
+        run: python check_routing.py
+
+      - name: Regression suite
+        run: python -m pytest -q
+
+      - name: Summarise skipped and expected-failure coverage
+        if: always()
+        run: python -m pytest -q -ra --no-header -p no:cacheprovider 2>&1 | tail -n 40
