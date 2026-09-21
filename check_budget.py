@@ -26,6 +26,10 @@ What is measured, and why each measure is shaped the way it is:
   4. **Reference discoverability.** Every reference must be reachable from SKILL.md or nothing will
      ever load it. (`check_repo.py` also enforces this; the duplication is deliberate, because a
      dead reference is invisible in a way a broken path is not.)
+  5. **Corpus size** (a note, never a failure). The budget above governs what every task *loads*;
+     this reports what the repository *carries*. The first cannot see the second: a new reference
+     costs exactly one index line, so the corpus can double while the narrative count stays green.
+     A large corpus is a choice; a growth nobody measured is the defect.
 
 Usage:
     python check_budget.py            # report; exit 1 if a hard limit is exceeded
@@ -156,6 +160,55 @@ def check_discoverable():
     return out
 
 
+# ---------------------------------------------------------------------------
+# The always-loaded part is budgeted above. The corpus is a different problem:
+# nothing loads all of it, so it has no natural ceiling, and a file is cheap to
+# add and expensive to remove. What is worth watching is the RATE, because the
+# SKILL.md budget cannot see it -- each new reference costs exactly one index
+# line there, so a corpus can double while the narrative budget stays green.
+#
+# Reported as notes, never as failures. A large corpus is a choice, not a
+# defect; what is a defect is a growth nobody noticed. The thresholds are set
+# where the current corpus sits, so the note starts firing on the *next* pass
+# rather than describing the present one.
+CORPUS_FILES_NOTE = 110
+CORPUS_LINES_NOTE = 26000
+
+
+def check_corpus():
+    """Report corpus size so growth is visible instead of discovered late."""
+    refs = sorted(glob.glob(os.path.join(REFS, '**', '*.md'), recursive=True))
+    scripts_dir = os.path.join(SKILL_DIR, 'scripts')
+    scripts = sorted(p for p in glob.glob(os.path.join(scripts_dir, '**', '*'), recursive=True)
+                     if os.path.isfile(p))
+
+    def count(paths):
+        total = 0
+        for p in paths:
+            try:
+                with open(p, encoding='utf-8', errors='replace') as fh:
+                    total += sum(1 for _ in fh)
+            except OSError:
+                pass
+        return total
+
+    ref_lines, script_lines = count(refs), count(scripts)
+    n_files = len(refs) + len(scripts)
+    lines_total = ref_lines + script_lines
+
+    notes = ['corpus: %d references + %d scripts = %d files, %d lines total'
+             % (len(refs), len(scripts), n_files, lines_total)]
+    if n_files > CORPUS_FILES_NOTE:
+        notes.append('corpus is %d files, past the %d-file note threshold -- every entry costs '
+                     'an index line in SKILL.md and a share of the maintenance surface, so '
+                     'confirm the new ones are load-bearing rather than merely adjacent'
+                     % (n_files, CORPUS_FILES_NOTE))
+    if lines_total > CORPUS_LINES_NOTE:
+        notes.append('corpus is %d lines, past the %d-line note threshold'
+                     % (lines_total, CORPUS_LINES_NOTE))
+    return notes
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -169,6 +222,7 @@ def main():
     findings += check_index_rows(lines)
     findings += check_discoverable()
     notes = check_restated()
+    notes += check_corpus()
 
     if args.json:
         print(json.dumps({'findings': [{'level': l, 'message': m} for l, m in findings],
