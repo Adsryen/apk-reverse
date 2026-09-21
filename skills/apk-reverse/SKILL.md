@@ -107,6 +107,13 @@ vocabulary and a set of reassuring numbers.
 - Packers, custom loaders and code virtualization: identifying them, measuring the validation
   boundary, and the routes that survive it (`packers.md`,
   `code-virtualization-and-custom-linkers.md`).
+- **Java2C** — recognising that the code left the dex entirely, and the evidence that separates it
+  from an extraction shell, a VMP and ordinary JNI sinking (`java2c-and-jni-sinking.md`,
+  `scripts/java2c_probe.py`). Measured: `native` declaration density was **0.03-0.04%** in three real
+  JNI samples against **82.76%** in a Java2C-shaped fixture — roughly 2000x — and the `Java_*` symbol
+  count matched the dex native-method count 1:1 per ABI. **No library produced by a Dex-to-C compiler
+  was built here** (no NDK, no host clang, no device clang, WSL unavailable), so every Java2C-specific
+  criterion is `inferred`; the JNI-sinking side and the discrimination itself are `observed`.
 - The native layer: `.so` hosts, tamper-triggered self-termination, forged ELF structure, and
   neutralising a terminate path without freezing the process (`native-and-so.md`,
   `native-tamper-and-suicide.md`).
@@ -299,7 +306,8 @@ unread in this repository.
 | A `FORTIFY: pthread_mutex_lock called on a destroyed mutex` abort in a Flutter app, on the **main** thread, before the first frame completes | `dart-aot.md` — check `libapp.so` is actually being loaded; Flutter's engine bootstrap is the usual place a native lifecycle fault surfaces |
 | Log says a **Java-layer** signature/integrity check **passed**, yet the process dies | `code-virtualization-and-custom-linkers.md` §a Java-layer "signature killer" is a decoy |
 | Deleting a library fixes validation but yields `UnsatisfiedLinkError: dlopen failed: library "X" not found` | `code-virtualization-and-custom-linkers.md` §the deadlock that eats hours |
-| Whole classes appear as bare `native` declarations with no body | `code-virtualization-and-custom-linkers.md` |
+| Whole classes appear as bare `native` declarations with no body | `java2c-and-jni-sinking.md` — read it **before** dumping memory: if this is Java2C there is no DEX to find, at any point in the process lifetime. A handful of `native` methods in an otherwise ordinary dex is JNI sinking, not this |
+| A `Java_*` search over a hardened library returns nothing at all | `java2c-and-jni-sinking.md` §The JNI boundary — why a symbol search fails silently — dynamic registration, or `-fvisibility=hidden`. The check that works is "exports `JNI_OnLoad` and zero `Java_*`" |
 | A library's **SONAME does not match its filename** | `code-virtualization-and-custom-linkers.md`, `native-and-so.md` |
 | Your edit had **no effect at all**, with no error | `server-config-and-updates.md` §3 (the value may be server-sent), then `packers.md` §map the validation boundary |
 | Process **hangs** with no crash record, or dies to a `uid 0` killer | `native-tamper-and-suicide.md` §the rule (you probably made a terminate path *not return*) |
@@ -336,6 +344,9 @@ unread in this repository.
 | The traffic is protobuf/gRPC/QUIC, or a proxy sees TLS but requests still fail on a Flutter app | `references/protocol-reverse.md` — schema-less protobuf, frame capture, and native-side pinning |
 | Userspace hooks land and the app still dies: the check reads `/proc/self/status` through a raw `svc`, or runs before `JNI_OnLoad` | `references/kernel-and-environment-hardening.md` — what the next layer up and down can actually do, and when to stop |
 | You must edit, repack, sign or inspect the APK **from the phone itself** | `references/on-device-tooling.md`, `scripts/mt_mcp_probe.py` |
+| A captured body decodes to nothing readable, or you cannot tell whether a length-delimited field is a string, a nested message or a packed array | `protocol-reverse.md` §1. Protobuf on the wire (measured) — run `scripts/protobuf_decode_raw.py`; the candidate list and its `tie:` lines are the answer, and `docs/tool-verification/EXTENSION-protobuf-raw.md` records exactly what a schema-free decode can and cannot settle |
+| Method bodies are present but decode as **private opcodes**, and you need the mapping rather than an explanation of why VMP is hard | `vmp-differential-analysis.md`, then `advanced-unpacking.md` for the shape diagnosis |
+| A store build arrives as `base.apk` + `split_config.*.apk`, or a rebuilt build is refused **as a set** although every file verifies on its own | `split-apk.md` — one keystore across every member for `pm install-multiple`, and check that a merge is legal before trusting a merged single APK |
 
 ## Gates — clear these before you patch, in order
 
@@ -556,6 +567,8 @@ Load only what the current step needs.
 | `references/byte-level-patching.md` | You want to change behaviour by editing a few bytes rather than rebuilding a method — equal-length patches, locating an instruction's exact offset, dex header integrity fields, branch polarity, verifier legality |
 | `references/packers.md` | The app is packed/hardened, or an edit makes it die before your code runs. Also load before discarding any route as "blocked by the shell" |
 | `references/code-virtualization-and-custom-linkers.md` | **No packer, dex is readable, and a re-signed build still dies** — whole classes turned into `native` declarations, a private loader with a mismatched SONAME, an embedded self-decrypting payload, or a Java-layer "signature killer" that logs success while a native check kills you. Covers the keep-it/drop-it deadlock and the string-redirect escape |
+| `references/java2c-and-jni-sinking.md` | **Whole classes are bare `native` declarations and you are about to hunt for a decrypted DEX** — Java2C has none, ever: the code was compiled into a `.so`, so the route is reading that library, not dumping memory. Also the JNI boundary itself — why a `Java_*` symbol search fails silently — and the evidence that separates Java2C from an extraction shell, a VMP and ordinary JNI sinking |
+| `references/vmp-differential-analysis.md` | Method bodies are present but decode as **private opcodes** — a real Dex VMP: the known-plaintext differential, which links can and cannot be automated, how to *prove* a derived opcode table, smali generation, and when the route is closed |
 | `references/framework-runtimes.md` | The UI is not native (Flutter / React Native / Unity / Cordova), or Java-layer hooks fire zero times while the UI clearly works |
 | `references/dart-aot.md` | The logic lives in a Dart AOT snapshot (`libapp.so`): pinning the Dart version, building a matching decompiler, the object pool and reference indexing, register/boolean conventions, locating and patching Dart code |
 | `references/native-and-so.md` | Patching in a `.so`, needing code to run before the app's own code, hand-built native payloads that crash inside the linker, or **deciding which library/ABI is actually loaded and executing** |
@@ -586,6 +599,7 @@ Load only what the current step needs.
 | `references/protocol-reverse.md` | The traffic is protobuf without a schema, gRPC, or QUIC/HTTP3; or a proxy sees TLS while the app still fails — schema recovery, frame capture, and native-side certificate pinning (Flutter/BoringSSL) with its boundaries |
 | `references/kernel-and-environment-hardening.md` | Userspace hooking provably cannot reach the check — raw `svc` syscalls, `init_array`-early detection, a ROM that hunts instrumentation: what each layer up and down can still do, the kernel-route map and its version gate, and when escalating is the wrong answer |
 | `references/on-device-tooling.md` | Working **from the phone itself**: MT Manager edit/repack/sign and its built-in APK MCP, LSPosed Manager, Termux+frida, and on-device data inspection |
+| `references/split-apk.md` | The target is a **split APK / App Bundle set** (`base.apk` + `split_config.*.apk`), or `pm path <PKG>` returned several files: reading a set off a device, when merging into one APK is legal versus when only unified re-signing works, the install refusal each mistake produces, the manifest attributes a merge breaks, and ABI/density matching |
 
 ## Script index
 
@@ -608,7 +622,7 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/dart_pool_strings.py` | Recover string literals from a Dart AOT snapshot: framed entries, the one-byte vs UTF-16 split, file offsets, and a run-length noise filter |
 | `scripts/dart_disasm.py` | Annotated windowed disassembly of Dart AOT code (pool + boolean annotations) plus a B/BL caller index |
 | `scripts/find_refs.py` | Count and list callers of a method/field (blast-radius check). Takes a smali tree, a `.dex`, a directory of either, or an `.apk`. Always prints what it scanned, so "the input was unreadable" cannot be mistaken for "nothing references it" |
-| `scripts/repack.py` | Rebuild an APK with replaced dex, strip only signatures, keep `META-INF/services/`, **write a 4-byte-aligned archive** (`resources.arsc` STORED+aligned, which Android R+ refuses to install without), sign, and verify |
+| `scripts/repack.py` | Rebuild an APK with replaced dex, strip only signatures, keep `META-INF/services/`, **write a 4-byte-aligned archive** (`resources.arsc` STORED+aligned, which Android R+ refuses to install without), sign, and verify. Also handles **split APK / App Bundle sets**: inventory one (`--split-dir`/`--split`), sign every member with a single keystore for `pm install-multiple` (`--split-mode resign`), or fold code/native members into one standalone APK (`--split-mode merge` — refused by design when a member carries its own `resources.arsc`). `--signer auto/jar/apksigner` covers hosts without uber-apk-signer; see `references/split-apk.md` |
 | `scripts/dexpatch/` | dexlib2 method-level rewriter (for changes that genuinely need new instructions) + build notes |
 | `scripts/devsh.py` | Quoting-safe ADB shell helper for rooted devices |
 | `scripts/usb_net_proxy.py` | Give an offline device network over USB (adb reverse + local proxy) |
@@ -638,3 +652,7 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/stalker_trace.js` | Instruction-level tracing with Frida Stalker: configurable module/offset targets, trigger selection, the event stream, output-size rules, and `transform` customisation |
 | `scripts/stalker_report.py` | Reduce a `stalker_trace.js` log into block histograms and call sequences, and print an explicit diagnostic for the measured **zero-event** case |
 | `scripts/mt_mcp_probe.py` | Probe MT Manager's on-device APK MCP (Streamable HTTP, `127.0.0.1:8787/mcp`): JSON-RPC handshake plus grouped `mt_apk_*` tool inventory; prints start-it-by-hand instructions and exits 2 while the service is down |
+| `scripts/java2c_probe.py` | Collect the evidence that separates **Java2C** from an extraction shell, a VMP and ordinary JNI sinking: per-class `native` density, native-dominated classes and stub ratio from the dex, plus `Java_*` / `JNI_OnLoad` / dynamic-registration / toolchain-string evidence from the `.so`. Every item carries a strong/medium/weak label and the weak ones print their own warning — reading a single criterion is how this gets misdiagnosed |
+| `scripts/protobuf_decode_raw.py` | **Schema-free protobuf decode**: hex string, binary file or stdin to a JSON tree, with every length-delimited field reported as a candidate set (nested message / UTF-8 / packed array / opaque bytes) and ties labelled rather than guessed. Flags the proto3 explicit-zero and packed-boundary ambiguities; `--max-depth`, `--split`, and `--reencode --check` for a byte-exact round trip. Cross-checked field-for-field against the official runtime |
+| `scripts/vmp_diff_harness.py` | Differential hardening for Dex-VMP: build a labelled opcode-coverage fixture (**218 of 224 opcodes, measured**), derive a candidate private-opcode map from an original/hardened dex pair with per-entry confidence and a run-level verdict, forge known-table fixtures to verify the comparison in a closed loop, and render a restored stream as a smali skeleton. The upload-to-a-hardening-service link is **not automatable** — see `references/vmp-differential-analysis.md` §2 |
+| `scripts/kernelsu_syscall_mask.py` | Generate a configurable KernelSU/APatch syscall-masking scaffold: an installable userspace module skeleton plus KPM/LKM/eBPF kernel-side templates, each with its version gate and an explicit unverified label. **A KernelSU userspace module cannot change a syscall return value** — the kernel-side templates are the part that could, and they are shipped unbuilt |

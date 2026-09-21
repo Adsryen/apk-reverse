@@ -55,9 +55,13 @@ Three consequences that decide how you interpret any decoded body:
 2. **A packed repeated field is invisible without a schema.** Field 4 above is three varints
    (`3, 270, 86942`) packed into one length-delimited value. A schema-free decode can only report it
    as opaque bytes — the length is known, the element boundaries are not.
-3. **An explicit zero is byte-identical to an absent field** in proto3 (`28 00` versus no bytes at
-   all). A decoded `0` is not evidence that the sender set the field, and "the server sent 0" is not
-   a safe conclusion from a decode alone.
+3. **A decoded `0` and a field that was never set are two different questions.** An implicit
+   (no-presence) proto3 field whose value is the default writes **nothing at all**, so `field = 0`
+   and "never touched" produce identical bytes; a field **with** presence (`proto2 optional`,
+   `proto3 optional`) set to `0` does put its tag and a zero byte on the wire. Both halves were
+   measured against the official runtime; a schema-free decoder can only flag the case, never
+   resolve it. So a decoded `0` was emitted on purpose by some writer, and a field *missing* from a
+   decode is not evidence that 0 was the value in use.
 
 ### Decoding without a schema
 
@@ -76,6 +80,63 @@ Three consequences that decide how you interpret any decoded body:
   (the `journal` file plus its entries), a DataStore file, or a Room blob column. `runtime-data.md`
   covers reading these, and `datastore_inject.py` can re-encode an edited DataStore value once you
   know the message.
+
+### The decoder that ships here (measured)
+
+`scripts/protobuf_decode_raw.py` walks a payload with no schema and prints a tree. Input is a hex
+string, a binary file, or stdin (hex text and raw bytes are told apart automatically); `0x` prefixes,
+spaces, commas, newlines and `\xNN` escapes are all accepted, and `|` splits independent frames.
+`--json` emits the same tree as data, `--max-depth` bounds the nesting, and `--reencode` writes a
+decoded (possibly hand-edited) tree back to bytes and can diff the result against the original.
+
+```
+$ python skills/apk-reverse/scripts/protobuf_decode_raw.py --hex "08 96 01 12 07 74657374696e67"
+frame 0  bytes 0..12  (12 B)  status=end_of_buffer
+  f1  varint  150
+  f2  len-delimited(7)  view=utf8_string
+      candidate utf8_string      0.50  valid UTF-8 with no control characters
+      candidate packed_varint    0.50  the payload is exactly a sequence of 7 varint(s) ...
+      candidate bytes            0.20  opaque bytes: always consistent with the payload ...
+      tie: packed_varint and utf8_string are equally consistent with these bytes ...
+      string: 'testing'
+```
+
+The point of the tool is the candidate list. Fed a nested message that `google.protobuf` 6.33.6
+itself produced (inner payload `0801120178`), it answers:
+
+```
+nested_message 0.50 | packed_varint 0.50 | utf8_string 0.35 | bytes 0.20
+tie: nested_message and packed_varint are equally consistent ... the view is a display default
+```
+
+Both readings really are legal protobuf for those six bytes, and no heuristic closes the gap. The
+confidence numbers are a documented ordering, not probabilities, and the `view` exists only so the
+tree can be expanded and re-encoded -- it is not a claim about what the field is.
+
+**Round trip, which is the strongest evidence available without a schema.** Decode, re-encode, and
+compare bytes: the message serialized by the official runtime re-encodes byte-identically to
+`SerializeToString()`; a real AndroidX DataStore file (81 B, written by `scripts/datastore_inject.py`)
+round-trips byte-identically; and editing one value in the JSON tree and re-encoding produced a file
+that the *other* tool read back as the new value. Two of the built-in fixture families are exceptions
+by design and are reported as such rather than hidden: a non-canonical varint re-encodes to the
+minimal form, and a `--split varint-length` run compares frame bodies only, since the length prefixes
+are framing and not message data.
+
+**What a schema-free decode cannot conclude -- write none of these down:**
+
+- that a length-delimited field *is* a string, a submessage or a packed array, rather than that it
+  could be any of them;
+- the element boundaries of a packed array, or its element type;
+- that a field's value was 0 because it is absent from the decode, or that a sender "set" a field
+  because a 0 appears (see the two traps above);
+- which message a field number belongs to, or that the same field number in two payloads means the
+  same thing;
+- that a payload which parses cleanly is a real message at all -- §6 has that failure mode, and the
+  fixes are a second sample and a round trip, not a longer look at the first one.
+
+The measured record for this tool -- every command, both input forms, the round trip, and the
+framing mistake it does *not* protect you from -- is in
+`docs/tool-verification/EXTENSION-protobuf-raw.md`.
 
 ## 2. Recovering the schema from the APK
 
@@ -252,6 +313,13 @@ the same message and expecting the same field set, (b) checking that nested leng
 their parents, and (c) when you have a schema, re-encoding the decoded structure and comparing bytes
 with the input — the same round-trip check used in §1, which caught a decoder bug in this
 repository's own fixture.
+
+**A framing choice that is wrong without being refused.** `--split varint-length` means protobuf's own
+`writeDelimitedTo` framing: a varint length, then the message. gRPC frames a message differently — one
+compression-flag byte, then a **four-byte big-endian** length (§3). Handed a real gRPC frame, the
+varint splitter reported **five** frames rather than failing, while the same bytes decoded with no
+splitting reported `stray_end_group`. Strip the 5-byte gRPC prefix yourself, and check the frame count
+either way: a wrong split still produces a decode, which is what makes it expensive.
 
 **Assuming the proxy sees everything.** The proxy sees what the client sends through it. An app that
 uses QUIC (§4), a raw socket, a native client bypassing Java's HTTP stack, or a certificate-pinned

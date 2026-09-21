@@ -9,9 +9,18 @@ structure before trusting); this script is the tool that rule was missing.
 
 Per file it reports: size, sha256, dex version, checksum/signature verdicts
 (`dexutil.verify_dex_header`), class count, method-body census (no-code / real /
-trivial-stub / empty), the trivial-body ratio that flags an extraction-shell
-skeleton, and --find pattern hits across the string table. Files are grouped by
-sha256 and the survivors are ranked: most likely original first.
+trivial-stub / nop-erased / minimal-form / empty), the stub and emptied ratios that
+flag an extraction-shell skeleton, and --find pattern hits across the string table.
+Files are grouped by sha256 and the survivors are ranked: most likely original first.
+
+**Read `emptied%`, not `stub%`, for the skeleton call.** The two differ, and the
+difference is load-bearing: `stub%` counts only bodies left as a lone `return*`, while
+`emptied%` also counts bodies wiped to nothing but nops. A shell that clears the slot
+instead of writing a return scores `stub% = 0.0` on a fully emptied image — measured,
+and it used to be ranked the *most likely original* because of it. `stub%` is also
+bimodal in practice: it lands at the app's own baseline or at ~100 %, with no band in
+between, and partial extraction (75 % of bodies removed) moves it by 0.2 points. Full
+matrix and commands: `docs/tool-verification/EXTENSION-extraction-shell-bench.md`.
 
 Exit code 0 unless nothing in the input parses as a dex at all (exit 1).
 
@@ -36,12 +45,34 @@ RETURN_OPS = {0x0E, 0x0F, 0x10, 0x11}  # return-void / return / return-wide / re
 
 
 def classify_body(data, code_off):
-    """Classify one code_item's instruction stream: 'empty' | 'stub' | 'real'.
+    """Classify one code_item's instruction stream.
 
-    'stub' = skip plain nop units (0x0000) and exactly one return* remains. That is
-    what an extraction shell leaves behind when it defers decryption to first
-    invocation, and what a repair fixture writes when mimicking one. Anything with a
-    second meaningful unit is real code, however small.
+    Returns one of 'empty' | 'stub' | 'erased' | 'malformed' | 'real'.
+
+    'stub'      -- skip plain nop units (0x0000) and exactly one return* remains.
+                   That is what an extraction shell leaves behind when it defers
+                   decryption to first invocation, and what a repair fixture writes
+                   when mimicking one.
+    'erased'    -- insns_size > 0 but every unit is 0x0000. Measured on a fixture:
+                   a body emptied by nop fill lands here, and reporting it as 'real'
+                   (the pre-2026-09 behaviour) inverted the ranking, because a fully
+                   nop-filled skeleton scored stub% = 0.0 and was named the most
+                   likely original. A real compiler never emits a whole body of
+                   nops, so this is skeleton evidence, not code.
+    'minimal'   -- a body truncated to `const/4 vR, #0; return vR` and nop-padded,
+                   with a non-zero high byte on the return. This is a *legal* minimal
+                   non-void body, not a malformed one -- and it is a skeleton shape
+                   the stub detector is blind to by design. Counted separately so the
+                   blind spot is visible in the report instead of hiding inside
+                   'real'. Measured: a fixture with all 5,061 bodies cut to this form
+                   reports stub% = 1.9%, the same as its untouched control.
+    'real'      -- anything else, including a body of a single non-return unit.
+
+    A two-unit `const/4 v0, #0; return v0` is deliberately **not** a stub: it is what
+    a *legal* minimal body looks like, and treating it as skeleton evidence would
+    make every tiny accessor a false positive. That asymmetry is the detector's
+    designed boundary, and it is measured in
+    `docs/tool-verification/EXTENSION-extraction-shell-bench.md`.
     """
     insns_size = u32(data, code_off + 12)
     if insns_size == 0:
@@ -55,14 +86,27 @@ def classify_body(data, code_off):
             continue
         meaningful += 1
         last_unit = unit
-        if meaningful > 1:
-            return "real"             # early exit: two units can never be a stub
+        if meaningful > 2:
+            return "real"             # three units can never be a stub or a minimal
+    if meaningful == 0:
+        return "erased"               # every unit was 0x0000
     if meaningful == 1:
         op = last_unit & 0xFF         # first byte holds the opcode for 10x/11x
-        if op == 0x0E and last_unit == 0x000E:        # return-void, no register
-            return "stub"
+        if op == 0x0E:
+            # 10x return-void has no operand: `0xNN0E` with NN != 0 is `return vNN`,
+            # i.e. a non-void return wearing a return-void opcode -- minimal form.
+            return "stub" if last_unit == 0x000E else "minimal"
         if op in (0x0F, 0x10, 0x11):  # 11x returns: high byte is the register
             return "stub"
+        return "real"
+    # meaningful == 2: legal minimal body only when it is `const/4 vR,#0; return* vR`
+    first_unit = 0
+    for k in range(insns_size):
+        if u16(data, base + k * 2):
+            first_unit = u16(data, base + k * 2)
+            break
+    if (first_unit & 0xFF) == 0x12 and (last_unit & 0xFF) in (0x0E, 0x0F, 0x10, 0x11):
+        return "minimal"
     return "real"
 
 
@@ -161,7 +205,7 @@ def profile_dex(path, patterns, trim=False):
     prof["signature_ok"] = sig_ok
 
     prof["classes"] = header["class_defs_size"]
-    no_code = with_code = stubs = empties = 0
+    no_code = with_code = stubs = empties = erased = minimal = 0
     try:
         for code_off in walk_methods(data, header):
             if code_off == 0:                       # abstract / native declaration
@@ -175,14 +219,26 @@ def profile_dex(path, patterns, trim=False):
                 stubs += 1
             elif kind == "empty":
                 empties += 1
+            elif kind == "erased":
+                erased += 1
+            elif kind == "minimal":
+                minimal += 1
     except Exception as exc:                        # desynced class_data: keep counts
         prof["walk_error"] = str(exc)
     prof["methods_no_code"] = no_code
     prof["methods_with_code"] = with_code
-    prof["bodies_real"] = with_code - stubs - empties
+    prof["bodies_real"] = with_code - stubs - empties - erased - minimal
     prof["bodies_stub"] = stubs
     prof["bodies_empty"] = empties
+    prof["bodies_erased"] = erased
+    prof["bodies_minimal"] = minimal
+    # trivial_ratio keeps its original definition (return*-stub share of bodies) so
+    # existing records stay comparable. The skeleton signal is the union of every
+    # measured emptied shape; a body wiped to nothing at all must never score lower
+    # than a body wiped to `return-void`, or the ranking inverts (see
+    # docs/tool-verification/EXTENSION-extraction-shell-bench.md).
     prof["trivial_ratio"] = (stubs / with_code) if with_code else 0.0
+    prof["emptied_ratio"] = ((stubs + erased) / with_code) if with_code else 0.0
 
     if patterns:
         try:
@@ -207,7 +263,38 @@ def collect_files(paths):
 
 
 def rank_key(prof):
-    return (prof["trivial_ratio"],
+    """Sort key: most-likely-original first.
+
+    Both body signals are needed, in the right order, and each was measured to fail
+    alone:
+
+    * the `return*`-stub share alone let a **nop-filled** skeleton score 0.0 and be
+      named the most likely original, because a wiped body counts as neither a stub
+      nor real code;
+    * `emptied_ratio` alone still failed, because it is **bimodal** -- it sits at the
+      host app's own baseline or at ~100 %, with nothing in between. A dex with 25 %
+      of its bodies emptied measures *below* its own untouched control, 1.7 % against
+      1.9 %, so the sort pointed at a modified image and called it the original;
+    * `minimal + erased` alone failed too, and in the opposite direction: a skeleton
+      that writes a bare `return-void` into every body has minimal = erased = 0 and
+      would sort first, despite `emptied%` = 100.
+
+    So the key combines both, and the combination has to let *either* signal disqualify
+    an image rather than letting them tie:
+
+    * level 1 -- `emptied_ratio >= 0.5`. Nothing that is mostly emptied is a candidate,
+      whatever else it scores. This is the level that evicts the two skeletons the
+      plain counts cannot see: an image with a bare `return-void` in every body has
+      minimal = erased = 0, so a pure-count key ranked it first.
+    * level 2 -- `minimal + erased`, the skeleton-evidence count, low-first. This is
+      what orders the **bimodal band**, where `emptied_ratio` cannot: the untouched
+      control carries 82, and the count is monotone as bodies are removed (1299 /
+      2524 / 3736 / 4946 at 25 / 50 / 75 / 100 %).
+    * level 3 -- `emptied_ratio` low-first, to separate what is left.
+    """
+    return (1 if prof.get("emptied_ratio", prof["trivial_ratio"]) >= 0.5 else 0,
+            prof.get("bodies_minimal", 0) + prof.get("bodies_erased", 0),
+            prof.get("emptied_ratio", prof["trivial_ratio"]),
             0 if prof["checksum_ok"] else 1,
             0 if prof["signature_ok"] else 1,
             prof["name"])
@@ -248,9 +335,9 @@ def main(argv=None):
     # ---- human-readable report -------------------------------------------------
     print("== dex dump validation: %d file(s), %d parse, %d rejected =="
           % (len(profiles), len(valid), len(profiles) - len(valid)))
-    fmt = "%-28s %9s  %-12s  %3s  %-7s %-7s %6s %5s %6s %7s"
+    fmt = "%-28s %9s  %-12s  %3s  %-7s %-7s %6s %6s %6s %7s %7s %7s"
     print(fmt % ("name", "size", "sha256[:12]", "ver", "cksum", "sig",
-                 "class", "noco", "code", "stub%"))
+                 "class", "noco", "code", "stub%", "erased%", "emptied%"))
     for p in profiles:
         if "error" in p:
             print("%-28s %9s  %-12s  %3s  REJECTED: %s"
@@ -261,12 +348,19 @@ def main(argv=None):
                      "ok" if p["checksum_ok"] else "BAD",
                      "ok" if p["signature_ok"] else "BAD",
                      p["classes"], p["methods_no_code"], p["methods_with_code"],
-                     "%.1f%%" % (100.0 * p["trivial_ratio"])))
+                     "%.1f%%" % (100.0 * p["trivial_ratio"]),
+                     "%.1f%%" % (100.0 * (p["bodies_erased"] / p["methods_with_code"]
+                                          if p["methods_with_code"] else 0.0)),
+                     "%.1f%%" % (100.0 * p.get("emptied_ratio", 0.0))))
         if p.get("trimmed_from"):
             print("%-28s   trimmed %d -> %d B (page-aligned dump)"
                   % ("", p["trimmed_from"], p["trimmed_to"]))
         if p.get("walk_error"):
             print("%-28s   walk stopped early: %s" % ("", p["walk_error"]))
+        if p.get("bodies_minimal"):
+            print("%-28s   minimal-form bodies: %d (const/4+return truncation -- a "
+                  "skeleton shape the stub%% column cannot see)"
+                  % ("", p["bodies_minimal"]))
         for pat, n in sorted(p.get("find_hits", {}).items()):
             print("%-28s   find %-24s %d" % ("", pat, n))
 
@@ -283,18 +377,32 @@ def main(argv=None):
         print("\nranking (most likely original first):")
         for i, p in enumerate(ranking, 1):
             note = ""
-            if p["trivial_ratio"] >= 0.5:
-                note = "  <-- SKELETON: stub%%=%.0f, extraction-shell shape" \
-                       % (100.0 * p["trivial_ratio"])
-            print("  %d. %-28s stub%%=%.1f  cksum=%s  sig=%s  classes=%d%s"
+            if p.get("emptied_ratio", 0.0) >= 0.5:
+                note = ("  <-- SKELETON: emptied%%=%.0f, extraction-shell shape"
+                        % (100.0 * p["emptied_ratio"]))
+            elif p.get("bodies_erased", 0):
+                note = ("  <-- %d body(ies) wiped to nops: skeleton evidence"
+                        % p["bodies_erased"])
+            print("  %d. %-28s stub%%=%.1f  erased%%=%.1f  min/erased=%d  cksum=%s  "
+                  "sig=%s  classes=%d%s"
                   % (i, p["name"], 100.0 * p["trivial_ratio"],
+                     100.0 * (p["bodies_erased"] / p["methods_with_code"]
+                              if p["methods_with_code"] else 0.0),
+                     p.get("bodies_minimal", 0) + p.get("bodies_erased", 0),
                      "ok" if p["checksum_ok"] else "BAD",
                      "ok" if p["signature_ok"] else "BAD",
                      p["classes"], note))
         top = ranking[0]
         copies = len(groups.get(top["sha256"], []))
-        print("\nverdict: %s is the most likely original (%d copy(ies) in this set)"
-              % (top["name"], copies))
+        print("\nverdict: %s is the best-supported candidate for the original "
+              "(%d copy(ies) in this set)" % (top["name"], copies))
+        print("ranked by: mostly-emptied images evicted first (emptied%% >= 50), then "
+              "the minimal+nop-erased body count low-first, then emptied%%.\n"
+              "  Limits, stated rather than hidden: this cannot see a `throw`-stub "
+              "skeleton (it scores at the control's own baseline), and a\n"
+              "  partially extracted image still outranks a heavily stubbed one. "
+              "Confirm the winner before using it as a patch baseline --\n"
+              "  docs/tool-verification/EXTENSION-extraction-shell-bench.md")
     else:
         print("\nverdict: no image parsed as a dex -- nothing to rank")
     return 0 if valid else 1

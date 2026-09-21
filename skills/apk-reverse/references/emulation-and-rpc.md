@@ -47,12 +47,40 @@ Emulation and RPC are for when the code that matters must keep *running*.
 | Maintenance cost | every missing JNI/syscall is a new stub | reconnect logic, process lifecycle |
 | Reproducibility | deterministic (you control time/random) | real time, real randomness |
 | Best for | signing algorithms, crypto, parsers | anything entangled with live app state |
+| **Priority when either could work** | second — the environment bill below is real and routinely underestimated | **first** — the device already owns the environment |
 
 The two-strike rule applies across the table: if a library refuses to run under unidbg after two
 focused rounds of `DalvikVM` patching, stop emulating and move to RPC (or the reverse) instead of a
 third round — a library that checks its own loading path or decrypts itself against device state
 may simply not be worth emulating, and that is a finding, not a failure (`SKILL.md`
 §Stop conditions).
+
+### The environment bill — budget days, not hours
+
+"Filling the environment" reads like a checklist and behaves like a project. The mistake this
+section prevents is starting an emulation because the table says *works against anti-injection*, and
+then discovering that this library's environment includes everything emulation cannot fake: an
+Android `Context` backed by a real package manager, Binder round-trips into another process, a
+`KeyStore` attestation that only succeeds on real hardware, or a self-check against device state
+captured at install time. For a commercial native algorithm of that shape, "stub it until it runs"
+is measured in **days, not hours** — each missing piece is discovered one fault at a time, and the
+rounds do not get shorter.
+
+Weigh it before starting:
+
+| Question | If yes |
+|---|---|
+| Does it call through `Context` (package name, files dir, signature, `PackageManager`)? | a stub is often enough — cheap, keep going |
+| Does it talk to another process (Binder service, bound SDK, remote provider)? | the stub surface grows fast; **prefer RPC** |
+| Does it verify hardware (KeyStore, TEE, an attestation chain)? | emulation is likely a dead end — the value it wants cannot be produced here |
+| Does it check its own loading environment (paths, maps, root, debugger, installer)? | readable and patchable *inside* the emulator, but budget one round per check |
+| Must it be called thousands of times a minute? | the RPC throughput ceiling is real — this is the case that justifies the bill |
+
+Default to **RPC first, emulation second**: the device already provides the environment, and
+per-call cost only starts to matter once you need volume. The two claims in this subsection
+(the day-scale cost of a Context/Binder/KeyStore-shaped library, and the RPC throughput ceiling)
+are **inferred** from the mechanism and from community practice — this repository has not emulated a
+commercial sample end to end, as `EXTENSION-emulation-rpc.md` states.
 
 ## Part A — Unidbg
 

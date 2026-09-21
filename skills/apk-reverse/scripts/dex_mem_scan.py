@@ -16,10 +16,24 @@ Feeding the extracted images to `dex_dump_validate.py` is the next step: this
 script only *finds* and *cuts*; that one judges whether what came out is a real
 body or an extraction-shell skeleton.
 
+**Measured hit rate on the reference device: zero for anonymous regions.** The
+root-dump pass recorded in `docs/tool-verification/EXTENSION-rootdump.md` scanned
+142 anonymous mappings and returned **no hits**, while the *named* ART dex mappings
+in the same process yielded 17 dex images without any search at all. A negative
+result from this script is therefore weak evidence: it is compatible with "the
+payload is not resident", "the payload is resident but not as a contiguous
+dex-magic image", and "the payload was paged out between capture and scan". Treat a
+zero-hit scan as a reason to check the named mappings first
+(`[anon:dalvik-classes*.dex extracted in memory from <src>]`), not as a conclusion
+about the packer. A positive hit inside a genuinely unnamed mapping has not been
+observed here yet.
+
 Scope note: the header's `file_size` field decides the cut. When the declared size
 does not fit inside the capture, the hit is reported and skipped rather than
 guessed at -- a dex whose tail is missing is not recoverable by truncating the
-wrong end.
+wrong end. Page-aligned captures from a VMA routinely overrun the image they hold,
+so a run against raw VMA exports usually needs `--keep-partial` or a trim step
+before `dex_dump_validate.py` will accept the output.
 """
 import argparse
 import hashlib

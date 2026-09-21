@@ -77,8 +77,10 @@ measurements.
 - Deciding **what the deliverable should be when an APK is not an option** — a repack refused by
   several independent checks is *blocked*, not expensive, and the fallback ladder is a system-level
   module, a local RPC service, or an honest report with a stated boundary.
-- Telling a **real memory dump from an extraction-shell skeleton**, by measuring the trivial-body
-  ratio instead of eyeballing it — and knowing which recovery route applies, including the root-side
+- Telling a **real memory dump from an extraction-shell skeleton** — and knowing that the
+  trivial-body ratio is *bimodal rather than a threshold*: it reads ~100% for a bare `return-void`
+  skeleton, but is blind to nop-cleared bodies, throw stubs and partial extraction, which are the
+  shapes real shells actually use. Then knowing which recovery route applies, including the root-side
   dump for when `frida` itself is refused by the target.
 - **Calling a routine instead of reversing it** when reversing costs more than invoking: emulated
   execution on the host, or a live function service-ified over Frida RPC.
@@ -91,6 +93,15 @@ measurements.
   native-side certificate pinning that ignores the system trust store.
 - Working **from the phone itself**: MT Manager's edit/repack/sign flow and its APK MCP surface,
   LSPosed Manager, and on-device data inspection, alongside the PC toolchain rather than instead of it.
+- Telling **Java2C apart from an extraction shell** before spending hours hunting a decrypted DEX that
+  does not exist at any point in the process lifetime — the code was compiled into a `.so`, and the
+  shapes are separated by a measured native-density difference of roughly 2000x, not by intuition.
+- Handling a build that arrives as a **split APK / App Bundle set**: reading the set off a device,
+  signing every member with one keystore for `pm install-multiple`, or merging code/native members
+  into a standalone APK when that is legal.
+- Working a **real Dex VMP** with the known-plaintext differential — which links can be automated and
+  which cannot, what a compiled fixture can and cannot reach, and how to *prove* a derived
+  private-opcode table instead of asserting one.
 
 ## Structure
 
@@ -207,6 +218,19 @@ references/               loaded on demand, one topic each
                               gate, and when to stop escalating
   on-device-tooling.md        working from the phone itself: MT Manager edit/repack/sign and its APK MCP,
                               LSPosed Manager, Termux+frida, on-device data inspection
+  java2c-and-jni-sinking.md   Java2C and JNI sinking, the two hardening shapes most easily confused
+                              with an extraction shell: the table that separates landing shell /
+                              extraction shell / VMP / Java2C / JNI sinking, why the code is in the
+                              `.so` and *never* in a dumped dex, and why a `Java_*` symbol search
+                              comes back empty (dynamic registration, `-fvisibility=hidden`)
+  split-apk.md                App Bundle / split APK sets: what the set is, pulling it off a device,
+                              merging into one APK vs signing the set as a unit, the install refusals
+                              and what each means, and making an installable fixture from a pulled set
+  vmp-differential-analysis.md
+                              the known-plaintext differential for a real Dex VMP: which links can be
+                              automated and which cannot (the upload is the bottleneck), the coverage a
+                              compiled fixture can reach, how to *prove* a derived private-opcode
+                              table, smali generation, and when the route is closed
 scripts/                  parameterized, path-agnostic
   doctor.py                   run this first: capability report + per-script runnability, finds
                               tools installed off-PATH or as runnable jars, and surfaces the
@@ -242,7 +266,9 @@ scripts/                  parameterized, path-agnostic
   dart_disasm.py              annotated windowed disassembly of Dart AOT code + B/BL caller index
   find_refs.py                count callers of a method before patching it
   repack.py                   rebuild APK, strip only signatures, keep META-INF/services/, write a
-                              4-byte-aligned archive (resources.arsc STORED+aligned), sign, verify
+                              4-byte-aligned archive (resources.arsc STORED+aligned), sign, verify;
+                              also split APK / App Bundle sets: inventory, sign every member with one
+                              keystore, or merge code/native members into a standalone APK
   devsh.py                    quoting-safe ADB shell helper
   usb_net_proxy.py            give an offline device network over USB
   datastore_inject.py         encode/inject AndroidX DataStore preferences safely
@@ -294,6 +320,19 @@ scripts/                  parameterized, path-agnostic
                               with an explicit diagnostic for the measured zero-event case
   mt_mcp_probe.py             probe MT Manager's on-device APK MCP (Streamable HTTP, port 8787):
                               JSON-RPC handshake plus the grouped tool inventory
+  java2c_probe.py             collect the evidence that separates Java2C from an extraction shell, a
+                              VMP and ordinary JNI sinking: native density and stub ratio from the dex,
+                              JNI_OnLoad / dynamic registration / toolchain strings from the `.so`,
+                              each item labelled strong/medium/weak
+  protobuf_decode_raw.py      schema-free protobuf decode: hex / file / stdin to a JSON tree, every
+                              length-delimited field kept as a candidate set with ties labelled rather
+                              than guessed, plus a byte-exact re-encode to check a round trip
+  vmp_diff_harness.py         build a labelled opcode-coverage fixture, derive a candidate private-
+                              opcode map from an original/hardened dex pair, verify the comparison in a
+                              closed loop, and render a restored stream as a smali skeleton
+  kernelsu_syscall_mask.py    generate a KernelSU/APatch syscall-masking scaffold: an installable
+                              userspace module skeleton plus KPM/LKM/eBPF kernel-side templates, each
+                              with its version gate and an explicit unverified label
 ```
 
 ## Install
@@ -383,7 +422,13 @@ tier of documented routes: **module-side delivery** when a repack is blocked,
 **extraction-shell recovery** and its VMP boundary, **emulation and live RPC** for
 calling rather than reading, **instruction-level tracing** against OLLVM, **protocol
 reversing** beyond REST, the **kernel-side route** map for when userspace hooking is
-provably out of reach, and **on-device tooling**. Unity/IL2CPP logic recovery,
+provably out of reach, and **on-device tooling**. A **benchmark pass** then put public
+targets under those routes (`tests/benchmark.md`): it added **Java2C discrimination** (the
+misdiagnosis that sends an agent hunting a decrypted DEX that never exists), **split APK /
+App Bundle handling**, **schema-free protobuf decoding**, a **Dex-VMP differential** harness,
+and **kernel-module templates with their version gates** — and it corrected two earlier
+claims, replacing the trivial-body *threshold* with a measured bimodal result and reopening
+a VMP verdict that a hand-written opcode table had got wrong. Unity/IL2CPP logic recovery,
 React Native/Hermes bytecode internals, and defeating a server-side authority are **not**
 covered, and the skill is written to say so and stop rather than apply the nearest
 documented procedure to a target it was not written for.
@@ -402,6 +447,10 @@ Three qualifications that the Coverage section states in full and that belong he
   `docs/tool-verification/EXTENSION-*.md`, one file per topic, with its own strength note. The
   common shape there is *the tool was measured, the route was not* — so read those files before
   treating any of the newer documents as a verified path.
+- **The benchmark pass is recorded per row, with that row's own strength.** `tests/benchmark.md`
+  names each public target, the scripts the row exercises, what actually happened (including the
+  rows that failed and the rows nobody ran), and how strong the evidence is. Rows marked
+  `unverified` are statements about the evidence in this repository, not about the mechanism.
 
 ## Repository maintenance
 
@@ -414,6 +463,11 @@ check_refs.py      every cross-reference that names a section of another
                    document reaches a real heading in that document
 build_scripts.py   audit for machine-specific leftovers (absolute paths, credentials)
 ```
+
+`tests/benchmark.md` holds the **regression matrix**: dimension -> public target -> the scripts the
+row exercises -> measured result -> strength label. It is the checklist to re-run before trusting
+any claim under `docs/tool-verification/`. Samples are downloaded into `tools/_work/` and are never
+committed, so each row names its public source and records the hash it was run against.
 
 `docs/tool-verification/` is not part of the installed skill either. It is the evidence record
 for one measurement pass against a real target: what each script actually did, which independent

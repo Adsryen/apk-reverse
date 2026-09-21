@@ -14,11 +14,13 @@ extraction shell and no VMP, so nothing here was exercised end to end against a 
 hardened sample by this skill's own verification pass. The FART/Youpk mechanisms and
 the Android 12-16 failure analysis are **inferred** from public work (FART/Youpk
 release notes and a 2026-08 Kanxue thread, `thread-292312`, on why classic
-active-invocation hooks die on modern ART). The one **measured** element is the
-detection metric: the trivial-body statistic was exercised by
-`scripts/dex_dump_validate.py` against a surgical fixture derived from a real hardened
-sample (see `docs/tool-verification/EXTENSION-unpacking.md`). Label your own results
-the same way.
+active-invocation hooks die on modern ART). The detection metric has since been
+**measured against a purpose-built extraction-shell fixture set**, and that pass
+invalidated the threshold this file used to state — see the calibration table in
+§Measuring extraction instead of guessing and the commands behind it in
+`docs/tool-verification/EXTENSION-extraction-shell-bench.md`. The older surgical fixture
+that first exercised the script is in `docs/tool-verification/EXTENSION-unpacking.md`.
+Label your own results the same way.
 
 Two parts of this file have since been exercised against live hardened targets on a
 rooted device. The **root-side memory route** (§Dumping when frida is refused) was run
@@ -28,7 +30,9 @@ traps and the throughput numbers are recorded in
 `docs/tool-verification/EXTENSION-rootdump.md`. The `frida-dexdump` refusal that
 motivates that section is in `docs/tool-verification/EXTENSION-device-run.md`. The
 FART/active-invocation half of the file is still **inferred** — no extraction-shell
-target has been spliced end to end here.
+target has been spliced end to end here, and the two candidate samples shipped in
+`repos/CyReverse` turned out not to be extraction shells at all (their two "shell"
+assets differ by six bytes; row B3 in the bench evidence file).
 
 ## The four shapes a dump can be
 
@@ -39,8 +43,17 @@ directory and read the `stub%` column — the four shapes separate on it.
 |---|---|---|---|
 | Parses, many classes, real bodies | near-baseline | First-generation landing shell; the whole-dex dump **is** the original | Done — filter (`recon.md` §Unpacking a dex-level packer) and proceed to patching |
 | Parses, many classes, most bodies are `return-void` stubs or nop fills | high | **Extraction shell skeleton** — bodies are decrypted only on invocation | FART loop, this file |
-| Whole classes appear as bare `native` declarations | n/a | dex2c / JNI sink — the code left the dex entirely | `code-virtualization-and-custom-linkers.md` |
+| Whole classes appear as bare `native` declarations, and the matching `Java_*` export exists | n/a | **JNI sinking** — the code left the dex for the `.so` | `java2c-and-jni-sinking.md` — read the function in the library, **not** this file |
+| Method bodies look like a thin forwarder to a native routine, or a single native island holds the app's own logic | n/a | **Java2C / native island** — the body is a compiled `J`/`.so` function, so re-reading the dex finds only the call | `java2c-and-jni-sinking.md` — the dex is the wrong instrument |
+| Whole classes appear as bare `native` declarations, and **no** `Java_*` export exists | n/a | Dynamic-registration native sink — the binding table is built at runtime | `java2c-and-jni-sinking.md` §the symbol search fails structurally |
 | Parses, bodies present but instruction streams are nonsense to a dalvik disassembler | baseline | **Real Dex VMP** — private opcodes behind a native interpreter | Last section of this file, and be honest about the cost |
+
+The two `native`-looking rows are **not** one row. They are separated because the
+correct next action differs: JNI sinking keeps the logic in a named, exported ARM64
+function that you read from the library, while a dynamic-registration sink has no
+symbol to find and needs the binding table read instead. Lumping them together sends an
+analyst to dump memory for code that is sitting in an ordinary `.so` — the misdiagnosis
+`java2c-and-jni-sinking.md` was written to stop.
 
 Two supporting signals worth recording while you are here (the second is measured on
 this repo's hardened sample): a shipped shell `classes.dex` can be megabytes in size
@@ -69,12 +82,67 @@ measured to differ in ~73% of their bytes), rejects structurally impossible imag
 (bad magic, `file_size` mismatch, ids out of range), counts classes and stub bodies,
 and ranks which surviving image is the most likely original.
 
-Calibration, **inferred** from field reports rather than measured across a population:
-ordinary app code carries a few percent of genuinely trivial bodies (constructors that
-do nothing, interface stubs); a ratio in the tens of percent or higher is a skeleton,
-not code. A ratio that is high *and* the image parses is the extraction-shell
-signature — a first-generation dump of the same app would show the same classes with
-real bodies.
+**Calibration — measured, and it is not a threshold.** Do not look for a `stub%` number
+to compare against. On a real 982 KB application dex (5,061 bodies) every emptying
+shape the shell family uses was built into a fixture and measured against a
+zero-change control (`docs/tool-verification/EXTENSION-extraction-shell-bench.md`,
+which carries the commands and the full matrix):
+
+| What the shell left behind | `stub%` | vs. control (1.9 %) |
+|---|---|---|
+| bare `return-void` in every body | 100.0 % | sighted |
+| body cut to `const/4 v0,#0; return v0` | 93.2 % | sighted |
+| nop fill, no return — **the slot-clearing shape** | 0.0 % | **blind, and scores below the untouched original** |
+| `new RuntimeException; throw` stub — **the 360/legu shape** | 1.9 % | **blind, indistinguishable from the control** |
+| 25 / 50 / 75 % of bodies emptied | 1.7 / 1.7 / 2.1 % | blind |
+
+The distribution is **bimodal**: `stub%` lands either at the app's own baseline
+(ordinary constructors and interface stubs, measured at 1.9 % here) or at ~100 %.
+Nothing sits in between, so there is no band a threshold could live in, and **partial
+extraction is invisible** — a dex with three quarters of its bodies removed reported
+0.2 points above its untouched control.
+
+Two consequences the metric's name hides:
+
+- **`stub%` high is dispositive; `stub%` low is not evidence of anything.** A low
+  reading is compatible with a genuine dex, a fully nop-wiped skeleton, and a
+  `throw`-stubbed skeleton alike.
+- **Read `emptied%`, not `stub%`, for the skeleton call.** `emptied%` unions the
+  `return*`-stub and the nop-wiped classes, which is what lifts the nop-filled
+  skeleton from 0.0 % to 100 %. A `throw`-stubbed skeleton still reads low; for that
+  shape the ranking cannot help you and only per-body inspection can.
+
+The trivial-body shapes `dex_dump_validate.py` counts, and which of them are skeleton
+evidence, are documented in the script itself (`classify_body`); the split between
+`stub` / `erased` / `minimal` exists because collapsing them produced a ranking that
+named a fully-wiped image the most likely original.
+
+### The ranking's failure conditions — read these before trusting its winner
+
+The `ranking` block names a "best-supported candidate for the original", and it is
+wrong in two measured situations. Both were reproduced, and both are the *opposite* of
+the obvious reading:
+
+- **A partially extracted image outranks a heavily stubbed one.** Ranking on the
+  emptied share alone put a dex with 25 % of its bodies removed *ahead of* its own
+  untouched control — 1.7 % against 1.9 %, because replacing a body with
+  `const/4 + return` lowers the `return-void` count. Measured before it was fixed;
+  the current key uses the count of skeleton-shaped bodies first, which is monotone,
+  and evicts anything over 50 % emptied.
+- **A `throw`-stub skeleton is invisible and ranks at the control's own baseline.**
+  Every body replaced by `new RuntimeException; throw` measured 1.9 % — identical to
+  the untouched image — and it still sorts third in the fixture set. No body statistic
+  in this kit sees that shape. If the target family is 360/legu-like, **do not use the
+  ranking to pick a baseline**; diff candidate images against each other by body hash
+  instead.
+
+The reason to state this in the reference file rather than only in the script: the
+ranking's output is a *sentence with a winner in it*, and a wrong winner is worse than
+no winner — an agent that adopts a modified image as its baseline builds every
+subsequent diff on the wrong artifact. When `emptied%` is at the app's own baseline and
+you cannot name a signal that separates the candidates, treat the ranking as
+uninformative for that set. Commands and full matrix:
+`docs/tool-verification/EXTENSION-extraction-shell-bench.md`.
 
 ## The FART loop: skeleton, invocation, splice
 
@@ -319,9 +387,46 @@ The last shape is the one to say out loud: if the dump's method bodies are intac
 decode as private opcodes — rare-opcode density off the charts, unknown opcode slots,
 and a large native interpreter loop behind them — the code has been virtualized, and
 nothing in this repository will hand it back to you decompiled. Distinguish it from
-the JNI sink first (`code-virtualization-and-custom-linkers.md`): there the methods
-are `native` stubs and the logic lives as native code; here the bodies are present
-and *re-encoded*.
+the JNI sink first (`code-virtualization-and-custom-linkers.md`,
+`java2c-and-jni-sinking.md`): there the methods are `native` stubs and the logic lives
+as native code; here the bodies are present and *re-encoded*.
+
+### Establish "the bodies do not decode" with a decoder you did not write
+
+This is the one measurement in this file that has already been got wrong here, so it
+gets its own rule. A hand-written opcode-width table silently desynchronises on large
+dex files — one arm64 branch opcode missing from the table is enough — and the
+desynchronisation is indistinguishable from the finding it fakes. Measured on the
+`ezAndroid` sample: a workbench table reported **1,393 of 22,424 bodies as
+non-decodable** and I read it as private opcodes; the platform decoder returned
+**943,223 lines, 34,566 instruction decodes, and zero structural errors** on the same
+file (`docs/tool-verification/EXTENSION-extraction-shell-bench.md` §3.4). The bodies
+were ordinary dalvik the whole time, and one of the "desync" methods disassembles into
+five clean instructions under `dexdump`.
+
+So: **before any VMP verdict, decode the same file with `dexdump`,
+`baksmali`/`smali`, or `jadx`, and quote the failure count that came from *it*.** A
+rare-opcode histogram is a lead, not evidence. Never let a private table's desync
+inform a classification — "my decoder stopped" is a fact about the decoder.
+
+### What a static dex probe can and cannot decide
+
+Two different questions live in the same dump, and only the first one is answerable
+from the bytes on disk:
+
+| Question | Statically decidable? | Why |
+|---|---|---|
+| Are the bodies real dalvik, or an encoded program? | **yes** | the platform decoder decodes them or reports a structural error |
+| Did the code leave the dex for native? | **yes** | `native` access flags, then `Java_*` exports / `JNI_OnLoad` in the matching `.so` |
+| Does a native island check signature, root or debugger? | **no** | the logic is ARM64 behind a vtable; the check may exist in no dex at all |
+| Are unlabelled `assets/` blobs live payload? | **no** | an unreferenced blob is dead until a runtime path constructs its name — measured: six such files in `ezAndroid`'s `assets/`, **zero** dex strings referencing them |
+
+The trap is the asymmetry. A clean static reading licenses exactly one sentence —
+*"this is not dex-VMP"* — and it does **not** license *"this is not hardened"*. Those
+are different claims: the second one is the misdiagnosis that sends an analyst looking
+for an unpacker when the problem is a native island, or for a private disassembler when
+the code is ordinary ARM64 in a 206 KB `.so`. A static probe's silence about hardening
+is silence, not a clean bill of health.
 
 What recovery looks like when someone does it, **all inferred**, no fixture exists in
 this repo, treat as a research plan rather than a recipe:
@@ -348,10 +453,12 @@ for the island itself.
 |---|---|---|
 | Dump parses, stub% near baseline | Filter, verify with jadx, move on to patching | `recon.md` |
 | stub% high, image parses | FART loop: skeleton + active invocation + splice | this file |
+| `emptied%` high but `stub%` low | nop-wiped skeleton; the old `stub%`-only reading called it the original | §Measuring extraction instead of guessing |
+| The ranking names a winner but `emptied%` sits at the app's baseline | Treat the ranking as uninformative for this set; do not adopt that image as a patch baseline | §The ranking's failure conditions |
 | Splice produces a half-parsing dex | Re-check code_item length (padding, handler list) | §The code_item length trap |
 | Dumper runs, output dir empty | Storage path + `open()` check, then entry-type probe | §Why the classic hooks die on Android 12-16 |
 | App dies under the invoker | Shell counter-measures; narrow the force list | §Why the classic hooks die on Android 12-16, and `detection-and-anti-analysis.md` |
 | frida attach refused (`script has been destroyed`) | Root-side `/proc/<pid>/mem` dump, atomic inside one process lifetime | §Dumping when frida is refused |
 | Sample self-exits and restarts with no instrumenter present | The packer's own check, not your hook; shorten every step to one lifetime | §Dumping when frida is refused |
-| Methods are `native` stubs | dex2c / JNI sink | `code-virtualization-and-custom-linkers.md` |
-| Bodies present, decode as nonsense | Real VMP — differential oracle or walk away | §The honest boundary: real Dex VMP |
+| Methods are `native` stubs with a `Java_*` export | JNI sinking — read the function in the `.so` | `java2c-and-jni-sinking.md` |
+| Bodies present, decode as nonsense | Real VMP — **but confirm with `dexdump` first**, then differential oracle or walk away | §Establish "the bodies do not decode" with a decoder you did not write |

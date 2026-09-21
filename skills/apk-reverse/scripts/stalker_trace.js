@@ -43,6 +43,16 @@
  *                  exec = per-instruction (ENORMOUS; only for a few hundred
  *                  instructions around a known point; off by default);
  *                  ret = return edges (off by default).
+ *   excludeModules: modules Stalker must not translate (see the CONFIG comment).
+ *                  Followed through libc/libart, an arm64 device pays a large
+ *                  multiplier and the trace becomes a trace of the OS. Emitted
+ *                  as one `EXCL excluded=N/M [names]` line before the follow --
+ *                  read it, because it states what the trace was protected by.
+ *                  A module not yet loaded cannot be excluded; exclusion is
+ *                  best-effort and applies to modules already mapped.
+ *   zeroEventWarnMs: emits `WARN zero events ...` when a follow delivered
+ *                  nothing by then, so a dead pipeline is not mistaken for
+ *                  "the code did not run".
  *
  * HOW TO RUN
  * ----------
@@ -101,6 +111,25 @@ var CONFIG = {
     followMs: 4000,        // unfollow after this long, no matter what
     maxBlocks: 100000,     // stop recording past this many reported events
     autoStart: true,       // false = arm triggers but wait for rpc start()
+
+    // Modules Stalker must NOT translate, resolved by name at follow time.
+    // Cost is the reason this exists. A followed thread whose execution runs
+    // through libc/libart pays a large multiplier on arm64 (community reports
+    // 20-50x) and drags the whole device down with it, and a hot library
+    // reached through a follow/unfollow cycle is where target processes have
+    // died. Excluding the system libraries you are not studying is the
+    // difference between a trace of your target and a trace of the OS.
+    // The target module is never excluded, even if its name is listed here.
+    excludeModules: [
+        'libc.so', 'libm.so', 'libdl.so', 'libc++.so', 'libc++_shared.so',
+        'libart.so', 'libartbase.so', 'libnativehelper.so',
+        'libutils.so', 'libbinder.so', 'libcutils.so', 'libbase.so',
+        'libui.so', 'libgui.so', 'libinput.so', 'libhwui.so', 'libskia.so',
+        'libEGL.so', 'libGLESv2.so', 'libvulkan.so', 'libandroid.so',
+        'liblog.so', 'libziparchive.so', 'libz.so'
+    ],
+    excludeModulesExtra: [],  // your own: 'libfoo.so', or 'libfoo.so+0x1000' for a sub-range
+    zeroEventWarnMs: 1500,    // warn when a follow has produced nothing by then
 
     events: {
         compile: true,     // first translation of each block (skeleton)
@@ -224,6 +253,40 @@ function onStalkEvents(events) {
     flush(true);
 }
 
+/* Exclude every configured module that is already mapped. Best-effort by
+ * design: a module that is not loaded yet cannot be excluded, so the count
+ * emitted here is what the trace is actually protected by -- read it before
+ * interpreting a bad trace. Exclusion must happen before follow(). */
+function applyExclusions() {
+    var names = (CONFIG.excludeModules || []).concat(CONFIG.excludeModulesExtra || []);
+    var excluded = [], attempted = 0, missing = [];
+    for (var i = 0; i < names.length; i++) {
+        var spec = names[i];
+        if (!spec) continue;
+        var plus = spec.indexOf('+');
+        var name = plus > 0 ? spec.substring(0, plus) : spec;
+        if (state.target && name === state.target.name) continue;  // never the target
+        var mod = null;
+        try { mod = Process.findModuleByName(name); } catch (e) { mod = null; }
+        if (!mod) { missing.push(name); continue; }
+        attempted++;
+        try {
+            if (plus > 0) {
+                var off = parseInt(spec.substring(plus + 1), 16) || 0;
+                Stalker.exclude({ base: mod.base.add(off), size: mod.size - off });
+            } else {
+                Stalker.exclude(mod);
+            }
+            excluded.push(name);
+        } catch (e) {
+            emit('EXCL-FAIL', spec + ': ' + e);
+        }
+    }
+    emit('EXCL', 'excluded=' + excluded.length + '/' + attempted +
+         ' [' + excluded.join(',') + ']' +
+         (missing.length ? ' not-loaded=' + missing.length : ''));
+}
+
 function beginFollow(tid, why) {
     if (state.following) return;
     if (!state.target) {
@@ -237,6 +300,8 @@ function beginFollow(tid, why) {
     line('MOD ' + state.target.name + ' base=' + state.target.base +
          ' size=' + state.target.size + ' path=' + state.target.path);
 
+    applyExclusions();
+
     Stalker.follow(tid, {
         events: {
             call: CONFIG.events.call,
@@ -248,6 +313,20 @@ function beginFollow(tid, why) {
         onReceive: onStalkEvents
     });
 
+    /* A zero-event trace has two very different meanings -- "nothing executed"
+     * and "the pipeline never delivered" -- and the log alone cannot tell them
+     * apart. This warning exists so the second reading is the default one. */
+    if (CONFIG.zeroEventWarnMs > 0) {
+        state.warnTimer = setTimeout(function () {
+            if (state.following && state.nBB === 0 && state.nBLK === 0) {
+                emit('WARN', 'zero events ' + CONFIG.zeroEventWarnMs +
+                     'ms after follow (blocks=0 blk=0 calls=0) -- the pipeline is ' +
+                     'NOT proven; do not report this as "the code did not run". ' +
+                     'Control: follow a thread running a known loop first.');
+            }
+        }, CONFIG.zeroEventWarnMs);
+    }
+
     if (CONFIG.followMs > 0) {
         state.timer = setTimeout(function () { endFollow('timeout'); },
                                  CONFIG.followMs);
@@ -258,6 +337,7 @@ function endFollow(reason) {
     if (!state.following) return;
     state.following = false;
     if (state.timer !== null) { clearTimeout(state.timer); state.timer = null; }
+    if (state.warnTimer) { clearTimeout(state.warnTimer); state.warnTimer = null; }
     try { Stalker.flush(); } catch (e) { /* already gone */ }
     try { Stalker.unfollow(state.followTid); } catch (e) { /* already gone */ }
     flush(true);

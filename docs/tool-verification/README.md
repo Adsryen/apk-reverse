@@ -46,6 +46,24 @@ evidence here, one file per topic, in the same three labels:
 | `EXTENSION-native-dbi.md` | Stalker: the zero-event boundary, the crash from following a hot libc export, and an offline protobuf round-trip that caught a defect in its own decoder |
 | `EXTENSION-kernel-ondevice.md` | The MT Manager APK MCP probe, the module-environment facts it could verify, and the kernel routes that this device's 4.14 kernel puts out of reach |
 
+## Benchmark-pass record
+
+The benchmark pass put **public targets** under the documented routes — `tests/benchmark.md` is the
+matrix, and these files are the evidence behind its rows. Same three labels. Several of these rows
+came back negative, and four of them overturned a conclusion this repository had already recorded;
+those are called out in the matrix rather than buried here.
+
+| File | Covers |
+|---|---|
+| `EXTENSION-benchmark-l1-l3.md` | The first two matrix rows: the L1 equal-length patch -> repack -> re-sign chain with its on-screen behaviour change and its zero-change control, and the L3 time-to-death baseline, the two spawn/patch/detach orderings that cannot work, and the terminate path that patching the obvious death site does not stop |
+| `EXTENSION-extraction-shell-bench.md` | `dex_dump_validate.py` against an 11-variant skeleton set: the trivial-body ratio as a bimodal result rather than a threshold, the three script defects the variants exposed, and the ranking that pointed at a modified image until independent review caught it |
+| `EXTENSION-stalker-exclude.md` | Stalker exclusion measured across three arms: the no-follow baseline, the follow that kills the process, and the follow with 20 modules excluded that survives but still delivers zero events |
+| `EXTENSION-java2c.md` | Java2C against JNI sinking: native-declaration density roughly 2000x apart, why a `Java_*` symbol search fails silently, and the Dex-to-C build chain no toolchain on this host could complete |
+| `EXTENSION-vmp-diff.md` | The known-plaintext differential: a 218-of-224-opcode coverage fixture, a closed-loop check that recovered 218/218 mappings with zero fabrications, and the one link that cannot be automated |
+| `EXTENSION-kernel-weapons.md` | The generated KernelSU/APatch scaffold and its three kernel-side templates, all shipped unbuilt, plus the structural correction that a userspace module cannot change a syscall return value |
+| `EXTENSION-split-apk.md` | Two real split sets through both branches: unified re-signing, the merge that is refused by design, the merge that succeeds, and the signer chain this host actually needs |
+| `EXTENSION-protobuf-raw.md` | A schema-free decoder cross-checked against the official runtime and a real DataStore container, with the packed-boundary and proto3-zero ambiguities reproduced on real bytes |
+
 ## Adding a run
 
 Record the tools, versions and exact commands, and label each claim. Keep target-specific facts out:

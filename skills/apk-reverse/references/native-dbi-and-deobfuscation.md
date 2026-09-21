@@ -182,6 +182,53 @@ across runs only for code that is mapped from file; do not compare a `libart`-ma
 address between two runs; and never place a follow/unfollow pair on a hot function (measured failure
 in §6).
 
+### The cost is not linear, and on arm64 it decides the tool choice
+
+Two costs decide whether Stalker is the right tool, and neither is visible in the API:
+
+- **Translation multiplier.** A followed thread pays a large constant factor on every translated
+  block. Community reporting for arm64 puts it at **20-50x**; the mechanism is not controversial
+  (every block is copied into the DBI's code cache and routed through a dispatcher), while the exact
+  number is workload-dependent. This one is `inferred` — this repository has not measured the
+  multiplier itself, only its consequences below.
+- **What you let into the trace.** Every block of every library the thread touches is a candidate.
+  Following into `libc` / `libart` / `libhwui` is how a four-second window becomes a device-wide
+  event: measured here, one such run took the test phone's `load average` to `34.11` on 8 cores and
+  destroyed a co-running job's attach (§6).
+
+`Stalker.exclude()` is the control for the second cost, and it is not optional.
+`scripts/stalker_trace.js` applies it before `follow()` from its `excludeModules` list and reports
+what it actually excluded on one `EXCL` line — read that line before believing any trace, because a
+module that was not loaded at follow time was **not** excluded. Exclude every system library you are
+not studying; the target module is never excluded even if its name appears in the list.
+
+Three failure shapes follow from ignoring this: deadlock, a watchdog `SIGABRT`, and the zero-event
+trace. The deadlock and the watchdog shape remain community reports (`inferred`); the other two were
+measured, **and the measurement splits the claim in two** — the split matters more than the summary:
+
+| Arm — one device, one package, one module, 6 s follow | Outcome |
+|---|---|
+| attach + resume, **no follow** | process survives |
+| follow, `excludeModules: []` | **process dies**, script destroyed |
+| follow, 20 system modules excluded | process survives, **but `blocks=0 blk=0 calls=0`** |
+
+Exclusion is what keeps the target alive — now `observed`, with the no-follow arm ruling out "it
+would have died under frida anyway". But exclusion does **not** restore event delivery: the
+zero-event trace survived the treatment arm unchanged. Treat those as two problems, and do not offer
+`exclude` as the fix for a follow that delivers nothing. Commands and outputs:
+`docs/tool-verification/EXTENSION-stalker-exclude.md`.
+
+**arm64 also raises the floor.** PAC/BTI-bearing code gives a translator more ways to mis-handle a
+block than armv7 did, which is one more reason a trace that works on an emulator is not evidence
+about a device. Treat any arm64 result as needing a control run (a followed thread executing a known
+loop, nonzero `BLK` lines) before it is interpreted.
+
+**Emulation is a legitimate alternative, not a consolation prize.** When the target is a pure
+computation inside a `.so` and its environment can be faked, a Unidbg/Unicorn trace can be both
+faster and more stable than Stalker on a real arm64 device: no device load, no watchdog, no PAC, and
+a deterministic replay. That inversion of the usual intuition is half the reason
+`emulation-and-rpc.md` exists — decide with its decision table rather than by habit.
+
 ## 5. From a trace to a deobfuscated function (inferred)
 
 This is the part the community write-up above also describes, and it is **inferred** here — the

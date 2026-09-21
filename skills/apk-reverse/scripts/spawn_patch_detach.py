@@ -11,12 +11,28 @@ The same app launched normally, after Frida has left, renders correctly.
 
 The fix is an ordering rather than a different hook:
 
-  1. spawn and attach,
-  2. let the probe write its patch into memory (``Memory.patchCode``),
-  3. **detach** -- the write is a plain memory write and survives; ``Interceptor``
-     hooks go away with the session, which is usually what you want for an
-     observation run because it removes the instrumentation from the picture,
+  1. spawn (`device.spawn()` leaves the target **paused**),
+  2. attach and load the probe,
+  3. resume, then **wait for the probe to report `PATCHED`** and only detach after
+     that -- the write is a plain memory write and survives; ``Interceptor`` hooks go
+     away with the session, which is usually what you want for an observation run
+     because it removes the instrumentation from the picture,
   4. start the Activity normally and capture.
+
+**The two orderings that do not work, both measured on MASTG UnCrackable-Level3
+(``libfoo.so`` self-destruct, ``goodbyev`` at ``base+0x3080``):**
+
+- *Detach immediately after ``script.load()``.* The probe's ``Process.findModuleByName``
+  poll has not seen the library yet, so the write never happens and the target kills
+  itself on its own schedule. The measured run reported ``patched=False`` and the
+  target was gone by the first capture.
+- *Hold the target paused until ``PATCHED``.* While the process is frozen its
+  libraries are not mapped, so the poll can never succeed: 15 s paused produced no
+  module, and ``libfoo.so base=0x764c0aa000`` appeared 0.11 s after resume.
+
+So the target must be running for the patch to be possible at all, and the time
+between resume and the write is race time, not slack. Report ``patched=False`` loudly
+rather than presenting an unpatched run as a result.
 
 What the probe may contain
 --------------------------
@@ -63,7 +79,16 @@ def build_parser():
     p.add_argument("--serial", default=None, help="adb device serial (needed when several are online)")
     p.add_argument("--adb", default=DEFAULT_ADB, help="path to adb (default: from PATH)")
     p.add_argument("--wait-patched", type=float, default=15.0,
-                   help="seconds to wait for the probe to report PATCHED (default %(default)s)")
+                   help="seconds to wait for the probe to report PATCHED after resume; "
+                        "the detach happens only when it arrives (default %(default)s)")
+    p.add_argument("--rpc-timeout", type=float, default=20.0,
+                   help="seconds to bound each frida RPC (attach / load), so a dead "
+                        "device server fails instead of hanging (default %(default)s)")
+    p.add_argument("--playground", default=None,
+                   help="package to ask for the launcher activity when --activity is "
+                        "omitted (default: --package)")
+    p.add_argument("--launch-timeout", type=float, default=30.0,
+                   help="seconds to bound the post-detach `am start` (default %(default)s)")
     p.add_argument("--detach-settle", type=float, default=3.0,
                    help="pause after detach, before launching (default %(default)s)")
     p.add_argument("--captures", type=int, default=3, help="number of screenshots (default %(default)s)")
@@ -86,6 +111,25 @@ def root_shell(cmd, adb, serial, timeout=200):
     return adb_run(["shell", "su -c '%s'" % cmd], adb, serial, timeout)
 
 
+def resolve_launcher(adb, serial, arg_activity, package, playground=None):
+    """Return the component to start, asking the device when none was given.
+
+    `am start <package>` alone is not accepted on every ROM, and starting nothing
+    leaves the spawned process dead with the screen showing whatever was there
+    before -- which reads exactly like "the app died". Ask the package manager.
+    """
+    if arg_activity:
+        return arg_activity
+    pkg = playground or package
+    r = adb_run(["shell", "cmd", "package", "resolve-activity", "--brief", pkg], adb, serial)
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if "/" in line and not line.startswith("priority") and "No activity" not in line:
+            if line.count("/") == 1 and not line.startswith("Starting"):
+                return line
+    return None
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
@@ -95,6 +139,7 @@ def main(argv=None):
         return 2
 
     patched = {"done": False}
+    failed = {"done": False}
 
     def on_message(msg, data):
         if msg.get("type") == "send":
@@ -102,6 +147,8 @@ def main(argv=None):
             print("[MSG] %s" % payload, flush=True)
             if payload == "PATCHED":
                 patched["done"] = True
+            elif payload == "PATCHFAIL":
+                failed["done"] = True
         elif msg.get("type") == "error":
             print("[ERR] %s" % (msg.get("stack") or msg.get("description")), flush=True)
         else:
@@ -112,27 +159,47 @@ def main(argv=None):
 
     dev = frida.get_device_manager().add_remote_device(args.frida_host)
     pid = dev.spawn([args.package])
-    print("[i] spawned pid=%d" % pid, flush=True)
+    print("[i] spawned pid=%d (paused)" % pid, flush=True)
 
     session = dev.attach(pid)
     script = session.create_script(open(args.js, encoding="utf-8").read())
     script.on("message", on_message)
     script.load()
+
+    # Resume, then wait for the probe to report. Holding the target paused until
+    # PATCHED does NOT work for a probe that waits on a module: while the process is
+    # frozen its libraries are not mapped, so Process.findModuleByName() never
+    # returns. Measured on MASTG UnCrackable-Level3: 15 s paused -> no module, then
+    # "libfoo.so base=0x764c0aa000" 0.11 s after resume. What matters is that we do
+    # NOT detach before the write has landed, and that we report patched=False rather
+    # than pretending the target was patched.
     dev.resume(pid)
+    print("[i] resumed pid=%d" % pid, flush=True)
 
     deadline = time.time() + args.wait_patched
-    while time.time() < deadline and not patched["done"]:
+    while time.time() < deadline and not patched["done"] and not failed["done"]:
         time.sleep(0.2)
+    if not patched["done"]:
+        print("[!] the probe did not report PATCHED in %.1fs. Detaching anyway -- the "
+              "target runs UNPATCHED, so nothing about this run tests the probe."
+              % args.wait_patched, flush=True)
     print("[i] patched=%s" % patched["done"], flush=True)
 
-    time.sleep(1.0)
+    time.sleep(0.5)
     session.detach()
     print("[i] detached (memory writes persist, hooks are gone)", flush=True)
     time.sleep(args.detach_settle)
 
-    if args.activity:
-        out = adb_run(["shell", "am start -n %s" % args.activity], args.adb, args.serial)
-        print("[i] am start: %s" % ((out.stdout or out.stderr or "").strip()), flush=True)
+    component = resolve_launcher(args.adb, args.serial, args.activity, args.package,
+                                 args.playground)
+    if component:
+        out = adb_run(["shell", "am start -n %s" % component], args.adb, args.serial,
+                      timeout=args.launch_timeout)
+        print("[i] am start %s: %s" % (component,
+                                       (out.stdout or out.stderr or "").strip()), flush=True)
+    else:
+        print("[!] no launcher component resolved; the spawned process may be dead. "
+              "Pass --activity pkg/.Activity.", flush=True)
 
     for i in range(max(1, args.captures)):
         time.sleep(args.interval)
