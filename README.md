@@ -74,6 +74,23 @@ measurements.
   bounded waits, so progress is not lost and the same mistake is not made twice.
 - Avoiding the specific mistakes that produce an APK that builds perfectly and dies at
   runtime.
+- Deciding **what the deliverable should be when an APK is not an option** — a repack refused by
+  several independent checks is *blocked*, not expensive, and the fallback ladder is a system-level
+  module, a local RPC service, or an honest report with a stated boundary.
+- Telling a **real memory dump from an extraction-shell skeleton**, by measuring the trivial-body
+  ratio instead of eyeballing it — and knowing which recovery route applies, including the root-side
+  dump for when `frida` itself is refused by the target.
+- **Calling a routine instead of reversing it** when reversing costs more than invoking: emulated
+  execution on the host, or a live function service-ified over Frida RPC.
+- Reading **instruction-level execution evidence** when a native function has been flattened into a
+  state machine by OLLVM — including the two ways Stalker was measured to bite back on a real device.
+- Recognising when **userspace hooking cannot reach the check at all** (raw `svc` syscalls,
+  `init_array`-early detection), what the next layer up and down can actually do, and when escalating
+  is the wrong answer.
+- Working **protocols that are not REST** — protobuf without a schema, gRPC, QUIC/HTTP3 — and
+  native-side certificate pinning that ignores the system trust store.
+- Working **from the phone itself**: MT Manager's edit/repack/sign flow and its APK MCP surface,
+  LSPosed Manager, and on-device data inspection, alongside the PC toolchain rather than instead of it.
 
 ## Structure
 
@@ -169,6 +186,27 @@ references/               loaded on demand, one topic each
                               emulator console control and recovery, preflight, look-at-the-screen
   verification.md             the claim ladder; what "done" means
   pitfalls.md                 the failure catalogue -- read before building
+  advanced-unpacking.md       the dump landed but the bodies are empty: extraction-shell diagnosis by
+                              trivial-body ratio, FART-style active invocation and why its classic hooks
+                              died on Android 12-16, code_item splicing, the root-side dump for when
+                              frida itself is refused, and the honest VMP boundary
+  lsposed-and-modules.md      the repack is refused, so deliver a system-level hook module instead:
+                              module anatomy, a gradle-free build chain, scope configuration and how to
+                              verify injection, and the layer a Java module cannot reach
+  emulation-and-rpc.md        call the routine instead of reading it: Unidbg/Unicorn emulation and its
+                              environment-filling cost, versus service-ifying a live function over Frida RPC
+  native-dbi-and-deobfuscation.md
+                              OLLVM shapes, Frida-Stalker traces, the trace-to-CFG route, the
+                              Stalker/QBDI/emulation decision, and two measured boundaries (a follow that
+                              delivers no events, and a crash from following a hot libc export)
+  protocol-reverse.md         protobuf without a schema, schema recovery from decompiled code, gRPC frame
+                              capture, the QUIC/HTTP3 limit, and native-side certificate pinning
+  kernel-and-environment-hardening.md
+                              userspace hooking provably cannot reach the check: raw `svc`, init_array-early
+                              detection, what each root scheme hides, the kernel-route map with its version
+                              gate, and when to stop escalating
+  on-device-tooling.md        working from the phone itself: MT Manager edit/repack/sign and its APK MCP,
+                              LSPosed Manager, Termux+frida, on-device data inspection
 scripts/                  parameterized, path-agnostic
   doctor.py                   run this first: capability report + per-script runnability, finds
                               tools installed off-PATH or as runnable jars, and surfaces the
@@ -238,6 +276,24 @@ scripts/                  parameterized, path-agnostic
                               writes survive detach while hooks do not
   hook_patch_only.js          the minimal probe for spawn_patch_detach.py — neutralise one native
                               death site by offset and report PATCHED
+  dex_dump_validate.py        dedupe, validate and rank a directory of dumped dex images: sha256
+                              grouping, header integrity, the trivial-body ratio that separates a real
+                              dump from an extraction-shell skeleton, and a most-likely-original ranking
+                              (--trim for page-aligned /proc/<pid>/mem captures)
+  dex_mem_scan.py             search memory captures for embedded dex images and extract each at the
+                              size its own header declares -- for a decrypted dex sitting in an
+                              anonymous mapping no maps entry names
+  lsposed_scaffold.py         generate a minimal LSPosed/Xposed module project (manifest with the
+                              xposed meta-data, assets/xposed_init, hook class, gradle-free build notes)
+  frida_rpc_serve.py          bridge a Frida script's rpc.exports to a local caller with reconnect
+                              handling, so a live native function can be called rather than reversed
+  rpc_template.js             the editable companion to frida_rpc_serve.py
+  stalker_trace.js            instruction-level tracing with Frida Stalker: configurable targets,
+                              trigger selection, the event stream, and output-size rules
+  stalker_report.py           reduce a stalker_trace.js log to block histograms and call sequences,
+                              with an explicit diagnostic for the measured zero-event case
+  mt_mcp_probe.py             probe MT Manager's on-device APK MCP (Streamable HTTP, port 8787):
+                              JSON-RPC handshake plus the grouped tool inventory
 ```
 
 ## Install
@@ -322,12 +378,17 @@ target-specific data.
 What it covers, and what it deliberately does not, is stated at the top of `SKILL.md`
 under **Coverage**. The short version: Android only (no iOS), and deep on the layers
 that have been worked through for real — dex patching, repacking, packers and custom
-loaders, native tamper response, and Flutter/Dart AOT. Unity/IL2CPP logic recovery,
+loaders, native tamper response, and Flutter/Dart AOT. An extension pass added a second
+tier of documented routes: **module-side delivery** when a repack is blocked,
+**extraction-shell recovery** and its VMP boundary, **emulation and live RPC** for
+calling rather than reading, **instruction-level tracing** against OLLVM, **protocol
+reversing** beyond REST, the **kernel-side route** map for when userspace hooking is
+provably out of reach, and **on-device tooling**. Unity/IL2CPP logic recovery,
 React Native/Hermes bytecode internals, and defeating a server-side authority are **not**
 covered, and the skill is written to say so and stop rather than apply the nearest
 documented procedure to a target it was not written for.
 
-Two qualifications that the Coverage section states in full and that belong here too:
+Three qualifications that the Coverage section states in full and that belong here too:
 
 - **Flutter/Dart AOT analysis has a dependency.** The workflow begins at a pool listing
   (`pp.txt`-class output). Producing that needs a snapshot-decoding decompiler — aotopsy (a static
@@ -337,6 +398,10 @@ Two qualifications that the Coverage section states in full and that belong here
   what was actually measured, on which target, and with which independent cross-check; anything not
   covered there is documented from experience and should be read as *inferred*, per this skill's own
   claim ladder.
+- **The extension pass is recorded separately and is mostly *inferred*.** Its evidence lives in
+  `docs/tool-verification/EXTENSION-*.md`, one file per topic, with its own strength note. The
+  common shape there is *the tool was measured, the route was not* — so read those files before
+  treating any of the newer documents as a verified path.
 
 ## Repository maintenance
 

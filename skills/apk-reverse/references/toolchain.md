@@ -93,6 +93,23 @@ grepping a hand-exported smali tree.
 The division of labour is worth stating plainly: **ASC locates, `ddc` reads.** Running a full `ddc`
 export first, then grepping it, is the slow path this tool exists to replace.
 
+**Measured in the extension pass** (droidasc `0.1.1.post1`, installed with `python -m pip install
+droidasc`; dependency is androguard only, no JVM, no SDK):
+
+| Command | Result on a 38.7 MB hardened APK |
+|---|---|
+| `getmanifest` | 0.44 s → 32,345 B of complete XML |
+| `findrefs … string jiagu` | 0.42 s → hits inside the shell class's `<clinit>` and `attachBaseContext` |
+| `getclass com/stub/StubApp` | 0.33 s → 22,802 B of Java |
+| `listclass` (whole APK) | 0.18 s → **4 classes** |
+
+Two facts from that run are worth carrying into any recon: the CLI name is **`droidasc`**, not `asc`
+(there is no `asc` binary, and `asc --version` is simply "command not found" — `python -m droidasc`
+also works), and on a packed APK a full `listclass` returning four classes is not a broken tool: the
+business dex is not in the file. Reaching for `getclass` on a class that is not there exits **1** with
+`Class … not found in APK.` — treat ASC as a manifest-and-shell inspector on hardened input, and take
+the business-logic question to a different layer.
+
 ### ddc — dex-to-Java with query subcommands (worth adopting)
 
 A single-file Rust binary, no install, no JVM. Two things make it more useful than
@@ -108,6 +125,22 @@ ddc app.apk -o out/                  # full decompile, a few seconds for a norma
 
 Measured on a 4.7 MB APK (4,070 classes / 30k methods): `info` ~0.13 s, `findrefs`
 ~0.11 s, one class ~0.25 s, full decompile ~2.8 s producing ~4,000 files.
+
+**Measured in the extension pass** (ddc `0.1.8`, a single Rust binary — on Windows `bin/ddc.exe`,
+1,028,096 B, **not on PATH** and carrying no PE version resource, so `ddc -V` is the only way to read
+its version; source: the project's GitHub releases):
+
+| Command | Result on a 38.7 MB hardened APK |
+|---|---|
+| `ddc info` | 0.24 s → label / package / version / application / launcher / sdk / size / md5, plus per-dex class, method, field and string counts |
+| `ddc findrefs <apk> string jiagu` | 0.13 s → tabulated `dex | kind | class | method | refs` |
+| `ddc strings -f jiagu --with-locations` | 0.14 s → strings mapped to the methods that hold them |
+
+**The trap on this one is the exit code.** Asked for a class that is not present, `ddc` exits **2**
+*and still prints its help text to stdout* — so a wrapper that tests "did anything come back?" reads a
+usage error as an answer. Branch on the exit code, never on output emptiness. The same run also
+confirms the layered picture from the other direction: `info`'s per-dex counters report 4 classes and
+29 methods with code for the whole 8.9 MB shell dex.
 
 Why the query subcommands matter more than the speed: **string cross-referencing
 becomes a lookup instead of a crawl.** Asking "which class mentions this config

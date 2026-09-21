@@ -23,6 +23,14 @@ out/
 work/
 audit_out/
 
+# local extension-pass workspace: toolchains, device archives, dumped images, scratch notes.
+# Nothing under tools/ belongs to the repository -- the skill's own evidence record lives in
+# docs/tool-verification/ and carries no target identity or vendored binaries.
+tools/
+
+# local input material (the reporting sample and the analysis notes it came with)
+存在问题和例子/
+
 # sandbox installs made while testing `npx skills add .` against this repo
 .claude/
 .agents/
