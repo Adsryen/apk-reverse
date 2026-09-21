@@ -181,3 +181,55 @@ full check runs; and running `check_repo.py` with `PYTHONIOENCODING=utf-8` set p
 failure (exit 1, one script reported as crashed) because its `subprocess.run(..., text=True)` does
 not pin an encoding while the child emits UTF-8 — the parent then decodes as cp936 and the streams
 come back empty.
+
+---
+
+## A later pass: fixing the `find_refs.py` defect, and what measuring it exposed
+
+The three defects recorded above as "documented but not fixed" were left alone for a stated reason:
+the repository ships nothing unrun. One of them — `find_refs.py` and `.dex` input — was reported again
+from outside with a clean reproduction, and that reproduction is correct. It is now fixed, together
+with a deeper defect the fix exposed.
+
+### `find_refs.py`
+
+Accepts a `.dex`, a directory of `.smali` and/or `.dex`, an `.apk`, or a smali tree. Dex input is
+decoded through `dexutil`, so baksmali is not required — which matters because the machine where the
+defect was found had no baksmali, jadx or apktool, and the tool was therefore completely unusable for
+that target. Input it cannot read is **refused with exit 2 and a reason**, and every run prints
+`[scanned] N file(s)` before the count, so "nothing was readable" can no longer print the same line as
+"read N files and found nothing".
+
+### `dexutil.py` — the part that could not be skipped
+
+`find_refs.py`'s dex path depends on `decode()`'s instruction boundaries, so those were measured
+instead of assumed. They were wrong: the opcode table was shifted from `0x16` to `0x2C` with nine
+widths wrong (F9), and 65 of 50,791 method bodies on a real dex did not decode to their declared
+boundary.
+
+Fixing `find_refs` while leaving that in place would have produced the same silent false zero the
+defect was reported for, one layer down. So names and widths were regenerated from the format
+specification's table, width became a lookup (`OP_UNITS`) rather than a chain of range tests, and the
+`goto` family was corrected in `branch_target()` and in `dex_find_insn.py`'s kind map.
+
+### Verification
+
+- `[scanned]`/`[total refs]` from a `.dex` and from the equivalent smali tree **agree with each other
+  and with the count written into the fixture by construction** (3 / 2 / 2).
+- **50,791 of 50,791** method bodies decode to their declared boundary (65 did not before), and **0**
+  operand indices fall outside their table (32 did before).
+- **androguard 4.1.4**, a decoder sharing no code with this project, produces **identical
+  per-instruction width sequences for all 50,791 bodies**.
+- Real target: `Ljava/lang/String;->length` → 356 references in 2.3 s; a five-dex directory → 9,472
+  across 2 files; a typo'd path → exit 2.
+- The four repo gates still pass: `check_repo.py` 0 problems, `check_refs.py` 0 dangling,
+  `build_scripts.py` 0 findings, `npx skills add … --list` lists the skill.
+
+### Why the fixture is in the tree
+
+`docs/tool-verification/fixtures/make_fixture_dex.py` is committed because it is the evidence for the
+counts above. Without it, "3 references" is a claim a later reader cannot check — which is exactly the
+evidentiary gap F5 describes, and the repository's rule that nothing ships unrun applies to claims as
+much as to code. It is dependency-free (stdlib only) so it reproduces on a machine with no Android
+toolchain, which is the machine the defect was found on. It carries no target data: the dex is
+synthesised from constants in the file.

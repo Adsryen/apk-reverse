@@ -48,11 +48,17 @@ warning earns its place.
 the script's stated purpose — deciding whether a hardening symbol exists in a library — the wrong
 answer is indistinguishable from the right one.
 
-**`find_refs.py` returns a clean empty result for input it cannot read.** Its docstring advertises
-"a smali tree or a directory of dex files"; `iter_files()` accepts only `.smali`. Given the dex
-directory it printed `[total refs] 0`, exited **0**, and emitted no warning. This is worse than a
+**`find_refs.py` returned a clean empty result for input it could not read.** Its docstring advertised
+"a smali tree or a directory of dex files"; `iter_files()` accepted only `.smali`. Given the dex
+directory it printed `[total refs] 0`, exited **1**, and emitted no warning. This is worse than a
 crash: it is the exact input to "nothing references this, safe to patch", produced by the very tool
 recommended for judging blast radius before patching.
+
+Re-measured later: the exit code recorded in this section was **0** and it is **1** — the `total == 0`
+path has always returned 1. The correction matters because it moves the defect from "no signal at
+all" to "the signal was there and the text contradicted it": the note diagnosed the *needle* and never
+named the *input form*, so a caller reading the message was still sent the wrong way. Fixed and
+re-verified; see F9 for what measuring it turned up underneath.
 
 Both, plus `dart_pprefs.py`'s silently dropped double constants, share one property: **the failure is
 one-sided and quiet.** None of the three reports reduced confidence in its own output.
@@ -63,7 +69,7 @@ one-sided and quiet.** None of the three reports reduced confidence in its own o
 
 | # | Script | Defect | Consequence | Status |
 |---|---|---|---|---|
-| 1 | `find_refs.py` | `iter_files()` matches only `.smali`; dex dirs yield 0 results, no error, exit 0 | silent false "no references" on the tool whose job is blast-radius | **cause identified, not fixed** |
+| 1 | `find_refs.py` | `iter_files()` matched only `.smali`; a dex dir yielded 0 results and a direct dex was regex-scanned as text | silent false "no references" on the tool whose job is blast-radius | **fixed, re-verified against a fixture and the real target** |
 | 2 | `elf_plt.py` | loop bound `off < fsz - 16` misses the final stub slot | false negative for one real symbol per library, conditionally | **fixed on a copy, re-verified** |
 | 3 | `dart_pprefs.py` | only the GP register file is decoded; `ldr dD,[x27,#imm]` (`0xFD400000`) and all double constants lost | under-reports pool references (302 displacements / 1,802 sites here), which breaks the "count refs to judge importance" advice in `dart-aot.md` §9/§10 — one site went `[0 refs]` → `[79 refs]` | **fixed on a copy; agrees with capstone 0/0** |
 | 4 | `so_constpatch.py` | rebuild drops the zip `extra` field, destroying 4 KB alignment | for `extractNativeLibs=false` APKs the output will not load; masked here because this target is DEFLATED + `extractNativeLibs=true` | **cause identified, proven by fixture; not fixed** |
@@ -177,3 +183,66 @@ in `classes2.dex` and `classes3.dex` but the classes that declare it are third-p
 did not trace the call chain. Whether this plumbing is a benign logging SDK, part of the Flutter
 plugin bootstrap, or a light-weight loader contributing to the abort is **unverified**. Stating it
 as established would be exactly the kind of overreach this report is trying to document.
+
+---
+
+## F9 — Fixing F2 exposed a deeper one: the dex opcode table was shifted, and nine widths were wrong
+
+Fixing `find_refs.py`'s dex path means depending on `dexutil.decode()`'s boundaries being right, so
+that was measured rather than assumed. It was not right: on a real 8.9 MB dex, **65 of 50,791 method
+bodies did not decode to their declared boundary**, and **32 carried an operand index outside the
+table it indexes**.
+
+The cause is a run of `OP_NAMES` and `insn_units` shifted by one from `0x16` to `0x2C`:
+
+| opcode | specification says | the repository had | width: spec vs repo |
+|---|---|---|---|
+| `0x17` | `const-wide/32` (31i) | `const-wide/16` | **3 vs 2** |
+| `0x18` | `const-wide` (51l) | `const-wide/32` | **5 vs 3** |
+| `0x1B` | `const-string/jumbo` (31c) | `const-class` | **3 vs 2** |
+| `0x1C` | `const-class` (21c) | `monitor-enter` | **2 vs 1** |
+| `0x1E` | `monitor-exit` (11x) | `check-cast` | **1 vs 2** |
+| `0x20` | `instance-of` (22c) | `array-length` | **2 vs 1** |
+| `0x21` | `array-length` (12x) | `new-instance` | **1 vs 2** |
+| `0x23` | `new-array` (22c) | `filled-new-array` | **2 vs 3** |
+| `0x26` | `fill-array-data` (31t) | `throw` | **3 vs 1** |
+| `0x2C` | `sparse-switch` (31t) | *(absent)* | **3 vs 2** |
+
+Plus `0xFA`-`0xFF` (`invoke-polymorphic`, `invoke-custom`, `const-method-handle`,
+`const-method-type`), absent from the width logic and defaulting to one unit each where the
+specification has 4, 4, 3, 3, 2, 2.
+
+The `goto` family went with it: `branch_target()` computed a branch target for `0x27`, which is
+`throw`, and read the offset width one opcode early for the rest. `dex_find_insn.py`'s kind map
+carried the same shift in its `goto` and `switch` entries, so a semantic search for a branch matched
+the wrong instructions.
+
+That this survived an earlier "fix instruction widths" pass is not surprising in hindsight:
+`insn_units` ended with `if op == 0x29: # measured: this slot is goto/16 (20t)` — the shape of a
+repair made one observation at a time, where the width of `0x29` was corrected without checking the
+opcode's *name* against a specification. Name and width were wrong together and consistently, which
+is exactly why the decode still looked plausible.
+
+**How it was settled.** Not by reading the table again, but by two measurements that do not depend on
+this project's code:
+
+1. **Self-consistency at scale.** A real dex is a stream ART can execute, so a correct decoder must
+   land every method body exactly on `insns_off + insns_size*2`. 65 did not. After the fix,
+   **50,791 of 50,791 do, with 0 illegal operand indices.**
+2. **A second decoder.** `androguard` 4.1.4 decoded the same dex independently. Aligned by method
+   order, the per-instruction width sequences are **identical for all 50,791 bodies — 0 differing.**
+
+Names and widths now come from the format specification's table, and width is a lookup (`OP_UNITS`)
+rather than a chain of range tests, which is the shape that made this class of error possible.
+
+**Two things this pass did not fix, recorded so they are not mistaken for clean:**
+
+- **`dexutil.string()` decodes MUTF-8 with `errors="replace"`.** Identifiers containing non-BMP
+  characters decode to U+FFFD — this sample has them, and one crashed a `print` with a
+  `UnicodeEncodeError` on a non-BMP codepoint. A class name read from the dex may therefore not
+  compare equal to the same name read from another tool. It does not affect instruction decoding or a
+  descriptor-based needle, but it is why the cross-check above had to align by order rather than by
+  key.
+- `OP_NAMES` had no entry for roughly 150 valid opcodes (`aget`/`aput`, the `cmp` family, the
+  `neg`/`not`/conversion unops, the arithmetic and `lit8`/`lit16` families). They decoded correctly by
+  fallback but printed as `op_XX`. The regenerated table covers 224 opcodes.

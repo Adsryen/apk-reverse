@@ -33,8 +33,14 @@ Ads and gates can be suppressed at several layers. Higher in this list = smaller
 ## Before you patch a method: blast-radius check
 
 ```bash
-python scripts/find_refs.py <smali_tree_or_dex_dir> 'Lcom/pkg/Helper;->methodName(args)RetType'
+python scripts/find_refs.py <smali_tree|dex|dir|apk> 'Lcom/pkg/Helper;->methodName(args)RetType'
 ```
+
+Read the `[scanned]` line before the count. It reports how many inputs were actually opened, and
+`[scanned] 0 file(s)` exits 2 with the reason: an unsupported path, a typo, or a directory of archives
+is **not** the same answer as "read 2 dex files and found nothing", and the two once printed
+identically — which put a false zero on exactly the decision this check exists to protect. A dex input
+is decoded directly (`dexutil.py`), so baksmali is not required.
 
 - **1–3 callers, all in the same feature area** → safe to patch.
 - **Many callers, or callers across unrelated packages** → it is a general utility. Do not patch it. Go one level up and patch the specific caller instead.

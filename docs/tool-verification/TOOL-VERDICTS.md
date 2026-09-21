@@ -27,7 +27,7 @@ of whether the tool was ever able to answer it.
 | `so_constpatch.py` | **verified on real target** for equal-length rewriting; **broken — cause identified, not fixed** for one sealed serious defect (zip alignment) |
 | `dex_strings.py` | **verified on real target** (multi-dex traversal confirmed) |
 | `dexutil.py` | **verified on real target** (used as the primary workhorse for the ad-chain analysis) |
-| `find_refs.py` | **broken — cause identified, not fixed**, and it fails *silently* |
+| `find_refs.py` | **broken — fixed and re-verified**; reads a `.dex` directly now |
 | `dart_pool_strings.py` | **verified on real target** |
 | `dart_pprefs.py` | **broken — fixed** (defect proven; corrected copy agrees with capstone to zero) |
 | `dart_disasm.py` | **verified on real target** |
@@ -269,24 +269,69 @@ The workhorse of the ad-chain analysis: symbol resolution, branch-target back-an
 `ended cleanly` verdict per method. Coverage: 175,829 method bodies with code, 213,180 `method_id`s.
 It is the tool whose output the zero-reference conclusion rests on.
 
-Two defects, both found by working at this scale:
+Three defects, all found by working at this scale:
 
 - `decode()` does not resolve operands — string and method indices must be decoded by the caller.
-- **Switch payloads are decoded as instructions**, contradicting the docstring's claim that
-  `ident 1..3` are recognized. This is the root cause of `saveToLocal` being reported as
+- **Switch payloads were decoded as instructions**, contradicting the docstring's claim that
+  `ident 1..3` are recognized. This was one root cause of `saveToLocal` being reported as
   "desync likely".
+- **The opcode table was shifted from 0x16 to 0x2C, and nine widths were wrong with it** — fixed.
+  `0x1C` carried the name `monitor-enter` and one unit; the format specification has `const-class`
+  there, at two units. `0x17` was `const-wide/16`/2 where the spec has `const-wide/32`/3; `0x18` was
+  3 where the spec has `const-wide`/5; `goto` was read one slot early, so `throw` was treated as a
+  branch. The plausible "same family, same width" reading of that run is wrong at nine opcodes, and
+  each wrong entry shifts every instruction after it inside that method.
 
-## `find_refs.py` — broken — cause identified, not fixed, and it fails silently
+  Proven by measurement rather than by re-reading the table: on a real 8.9 MB dex, **65 method
+  bodies did not decode to their declared boundary and 32 carried an operand index outside its
+  table**; after the fix, **50,791 of 50,791 land exactly on `insns_off + insns_size*2` with 0
+  illegal indices**. Independently cross-checked against androguard's decoder, which shares no code
+  with this project: same method count (50,791), and **0 differing width sequences** across all of
+  them.
 
-The docstring says it accepts "a smali tree or a directory of dex files". It does not:
-`iter_files()` yields only files ending in `.smali`. Given a dex directory it returns **0 files, no
-error, exit code 0**.
+  Names and widths now come from the format specification's table, and widths are a lookup
+  (`OP_UNITS`) rather than a chain of range tests. The `goto` family in `branch_target()` and in
+  `dex_find_insn.py`'s kind map moved with it.
+
+## `find_refs.py` — broken — fixed and re-verified
+
+The docstring said it accepts "a smali tree or a directory of dex files". It did not:
+`iter_files()` yielded only files ending in `.smali`. A direct `.dex` was yielded, then read as UTF-8
+text and regex-matched against smali syntax, which cannot match; a directory holding only dexes
+yielded nothing at all. Both printed `[total refs] 0` and a note blaming the needle, so a real dex, a
+dex directory and a typo'd path were **indistinguishable in the output**.
 
 This is the worst shape a defect can take in this particular tool, because `find_refs.py` is the
 script recommended for judging blast radius *before* patching. Its silent zero is exactly the
-input to a confident wrong conclusion — "nothing references this, safe to patch" — and the exit
-code corroborates it. Because no baksmali/jadx is installed on this machine, it was **completely
-unusable** for this target, and the analysis had to be built on `dexutil.py` instead.
+input to a confident wrong conclusion — "nothing references this, safe to patch". Because no
+baksmali/jadx is installed on this machine, it was **completely unusable** for this target, and the
+analysis had to be built on `dexutil.py` instead.
+
+Two corrections to the record above, both from re-measuring rather than re-reading:
+
+- The exit code was **1**, not 0 — the `total == 0` path has always returned 1, so a caller checking
+  status could already catch it. What misled was the *text*: the note diagnosed the needle and never
+  named the input form.
+- The dex-as-text path also read the whole file into memory to regex-scan binary for nothing, then
+  dropped it.
+
+Fixed in three ways at once, because all three were the same omission — the tool did not tell the
+difference between "found nothing" and "read nothing":
+
+- A `.dex` is decoded through `dexutil` (no baksmali needed), a directory is walked for `.smali` and
+  `.dex` alike, and an archive is opened for its `classes*.dex`.
+- Unsupported or unreadable input is **refused with exit 2** and a reason, instead of being reported
+  as zero references.
+- Every run prints `[scanned] N file(s)` first, so the two cases can never print identically again.
+
+Re-verified twice, in both directions:
+
+- Against a fixture whose call graph is known **by construction** (`make_fixture_dex.py` writes two
+  classes with 3, 2 and 2 references): the `.dex` and the equivalent smali tree return the same
+  counts, and they match what was written — 3 / 2 / 2.
+- Against the real 8.9 MB target: `Ljava/lang/String;->length` → **356 references in 2.3 s**; a
+  five-dex directory → 9,472 across 2 files; a typo'd path → `[error] no such file or directory`,
+  exit 2.
 
 **Correction to a related assumption in this environment:** `readelf` on `PATH` resolves to
 pyelftools' `readelf.py` and is *not* binutils — `--dyn-syms` and `-W` are rejected as unrecognized
