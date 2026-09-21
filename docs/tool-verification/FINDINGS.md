@@ -172,7 +172,8 @@ The launch does show non-standard startup plumbing (observed):
   loader logging numeric status codes
 - `E Instrumentation: Uninitialized ActivityThread, likely app-created Instrumentation, disabling
   AppComponentFactory` — the process is not taking the ordinary `ActivityThread` path
-- `E m.tingfeng.too: Unknown bits set in runtime_flags: 0x40000000`
+- `E <PKG-truncated>: Unknown bits set in runtime_flags: 0x40000000` (logcat truncates the tag to 23
+  characters, so the package name appears clipped in this line)
 
 And yet the dex-side packer verdict is clean: no hardening library in the native set, an ordinary
 `application android:name` (the app's own class, not a packer stub), no known packer markers. Those two

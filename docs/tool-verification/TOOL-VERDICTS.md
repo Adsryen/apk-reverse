@@ -167,7 +167,7 @@ it is unfortunate that the scanner then violates that principle itself, one slot
 **Claim under test:** reads a live process's mapping table and reports which libraries are actually
 loaded, at what base, with what real architecture.
 
-**Run:** `--pkg com.tingfeng.tool --serial SSBYPJKFNVEU6PGA`, exit 0, 635 ms, pid 27064.
+**Run:** `--pkg <PKG> --serial <DEVICE>`, exit 0, 635 ms, pid 27064.
 Reported three actually-loaded app libraries — `libloader.so` (3 segments),
 `libsentry-android.so` (2), `libsentry.so` (3).
 
