@@ -92,14 +92,13 @@ documentation (sources at the end of the section); none were re-measured here �
 
 Sources: KernelSU README + FAQ (github.com/tiann/KernelSU), APatch FAQ (apatch.dev, project
 originally at github.com/bmax121/APatch), fetched 2026-09. Device facts (Magisk alpha on kernel
-4.14.186) are `observed` in `tools/_phone-modules/README-手机模块环境.md`.
+4.14.186) are `observed` on the reference device used for this pass.
 
 ## 3. Environment-hiding modules: Zygisk-Assistant vs Shamiko
 
 Both are Zygisk modules that hide root + Zygisk from target apps. **Do not install both** — they
 overlap in function (mount-namespace handling, trace wiping) and interfere; this is documented in
-the module ecosystems and was the deciding fact on the reference device (`observed` in
-`tools/_phone-modules/README-手机模块环境.md`: Shamiko kept as a backup zip, uninstalled).
+the module ecosystems and was the deciding fact on the reference device (`observed`: Shamiko kept as a backup zip and uninstalled there).
 
 The practical difference is their **denylist dependency** (from each project's own README,
 `inferred`):
@@ -117,7 +116,7 @@ ZygiskNext) is the supported path. The denylist/enforcement settings are the par
 wrong: **enforcement off, list populated** is the working combination for both.
 
 Verification status: neither module's hiding effect was tested against a real detector on the
-reference device (`tools/_phone-modules/README-手机模块环境.md` §未覆盖的验证) — treat every
+reference device — treat every
 "this hides X" claim above as documented-but-unproven here.
 
 ## 4. Kernel-level interception — the map, and the version gate
@@ -137,7 +136,7 @@ uname -r            # on the device. The gate for most of this section is 5.10+
   expects it) targets GKI kernels. Source: the Android kernel architecture documentation on
   source.android.com (GKI and eBPF pages). On the reference
   device (kernel **4.14.186**) this entire row is **closed** — `observed` (the version), with the
-  consequence recorded in `tools/_phone-modules/README-MCP与网络环境.md`: eBPF-based tooling
+  consequence that eBPF-based tooling
   (stackplz, mcp-termux's tracing half) is unavailable there. Write the one-line environment fact
   per `detection-and-anti-analysis.md` Step 5 and do not revisit it.
 
@@ -255,7 +254,7 @@ rather than to any tool:
 ## 6. What the reference environment chose (and why it generalises)
 
 On the 4.14-kernel reference device, the escalation ladder terminates early — and that is the
-honest outcome (`observed`, from `tools/_phone-modules/README-*.md`):
+honest outcome (`observed` on that device):
 
 | Layer | Status on a 4.14 Magisk device |
 |---|---|

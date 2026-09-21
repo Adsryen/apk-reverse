@@ -12,7 +12,13 @@ build time) the figure is kept and the target is named generically.
 
 Targets measured: Flutter AOT applications, multi-dex, mid-size native library sets, no packer.
 
-The APKs themselves are **not** in this repository (`.gitignore` excludes `*.apk`).
+The APKs themselves are **not** in this repository (`.gitignore` excludes `*.apk`, and `tools/`).
+
+**Workbench paths are an operation record, not a pointer.** A record may say a run happened *at*
+`tools/_work/...` so the command can be judged; `.gitignore` excludes `tools/`, so that path is not
+something a reader can open. Anything a reader is *meant* to follow is named under
+`docs/tool-verification/` or inside the skill — that rule is why a reference document never cites a
+`tools/` path as its evidence, even when the work happened there.
 
 ## Strength labels
 

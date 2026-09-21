@@ -31,9 +31,9 @@ sequence". That is the whole format; the schema supplies meaning and nothing els
 | Wire type 5 | fixed 4 bytes (fixed32/sfixed32/float) |
 | Wire types 3/4 | group start/end, legacy; treat as unsupported when walking a modern payload |
 
-A host-side check of the rules, including the canonical `150 -> 96 01`, lives in
-`tools/_work/t4-dbi/pb_selftest.py` (workbench, not shipped with the skill). Measured output on the
-fixture built there:
+A host-side check of the rules, including the canonical `150 -> 96 01`, was run independently of the
+shipped decoder — `docs/tool-verification/EXTENSION-protobuf-raw.md` records that cross-check against
+the official runtime. Measured output on the fixture built for it:
 
 ```
 message (29 B): 089601120774657374696e671a0508011201782206038e029ea7052800
