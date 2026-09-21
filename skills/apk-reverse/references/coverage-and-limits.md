@@ -121,7 +121,11 @@ its own strength note at the top.
   problem — measure the ratio, name the recovery mechanism, stop when the target is a real VMP — but
   ships no modified ART runtime, no private-bytecode decompiler and no opcode-mapping derivation,
   and says so rather than presenting a memory dump as a recovery. `detection-and-anti-analysis.md`
-  decides by cost and often concludes "switch to static"; it is not a catalogue of evasion.
+  decides by cost and often concludes "switch to static"; it is not a catalogue of evasion. It now
+  also carries an order of search, plus a measurable environment self-report and an observer-only
+  probe — and the boundary that keeps those from becoming an evasion project is stated in the same
+  file (its Step 2B, two boundaries this file adopts): observers and interceptors stay separate
+  modules, and the cost of each added module is what decides when to leave for static.
 - **Kernel development.** `kernel-and-environment-hardening.md` maps the kernel-side route and names
   the version gate that decides whether it exists on your device; building and shipping a kernel
   module is outside this skill.
@@ -168,6 +172,43 @@ trace of a real target).
 `docs/tool-verification/EXTENSION-*.md`, one file per topic, each with its own strength note. The
 common shape there is *the tool was measured, the route was not* — read those files before treating
 any of the newer documents as a verified path.
+
+**The detection pass added two tools and three boundaries, and its evidence is mixed.** Recorded in
+`docs/tool-verification/EXTENSION-detection-pipeline.md`:
+
+- `svc_scan.py` — **measured**, and its whole claim is cross-checked: two independent decoders
+  (a hand-written word scan and the capstone-based scan) returned an identical 214-site set on a
+  device `linker64`, set difference empty. That agreement is what makes its output usable as
+  evidence about a *target's* library rather than about the scanner.
+- `anti_detect_probe.js` — **measured, observer-only by contract** (it patches nothing, so a run
+  that uses it still describes the target it was pointed at). On a public MASTG challenge target it
+  recorded `strstr("frida")` at ~300 ms of process life followed by a clean self-exit, and it
+  reported the target's own view of the environment (`TracerPid=0` while **four** frida-named
+  mappings were visible in `/proc/self/maps`). The same arm captured the full sequence **once out of
+  three runs** — on a target that dies in ~300 ms the window is sub-second and not arm-to-arm
+  reproducible, which is why the reference labels it that way rather than as a pipeline.
+- `scan_leaks.py` — **measured against a planted corpus and against this repository**. On the corpus
+  every rule fired (30 findings across 6 categories) and the exemption list produced zero false
+  positives on identifiers that must stay (tool names, SDK packages, dex constant identifiers, CVEs,
+  hardening products, public crackme names, placeholders). On this repository it found **26 strong
+  hits on its own evidence file**, which is the strongest evidence available that the class of leak it
+  targets is not visible by hand. `observed`.
+- **The Dart AOT string-table formats** — the arm64 packed scheme is confirmed at the byte level
+  (tag byte equal to `0x80|(len<<1)` at every literal checked, 4,980 chained pool entries), and the
+  previously documented armv7 form is **refuted**: the 32-bit record is
+  `[header u32][byte-count u32le][UTF-8 payload]`, and the extractor's zero for that ABI is a format
+  mismatch rather than an empty table. `observed` for the formats; `unverified` for an end-to-end
+  patched build, because none was repacked and installed in that pass.
+- **`observed`:** for the `ptrace-free` route, byte-identity between two *read paths*
+  (`/proc/<pid>/mem` versus the backing file) on the same byte range, and the route's negative
+  boundary — a target whose dex is deflate-compressed inside its APK has **no** named dex mapping to
+  export (`named_dex=0` on both MASTG targets), so the route yields nothing there for reasons that
+  say nothing about protection.
+- **`unverified`:** byte-identity between two independent *dumpers*. The second producer
+  (`frida-dexdump`) is refused by this repository's hardened sample, whose usable lifetime collapsed
+  to ~2 s this pass, and the clean targets have no whole-image dex for any dumper to find. The
+  weaker read-path check is what was run instead, and the distinction is stated in the evidence file
+  rather than papered over.
 
 **Where the record lives.** `docs/tool-verification/README.md` indexes it; `tests/benchmark.md` is
 the public-target regression matrix. Neither ships inside the installed skill (they sit at the

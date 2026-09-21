@@ -8,6 +8,21 @@ description: "Reverse engineer, debloat, de-ad, patch, or re-sign Android APKs, 
 Goal: reach a **verified, installable, still-working artifact** fast — and avoid the whole class of
 mistakes that destroy an APK while looking completely healthy.
 
+## Immediate — the four things to do before anything else
+
+Placed at the top on purpose: the longer this file gets, the less its middle is read, and everything
+below is explanation for these four moves.
+
+**1. Classify before choosing a route** (§Start here's thirteen questions; **R4** decides whether you
+are editing the right layer at all — a wrong branch produces an artifact that builds, runs, and does
+the wrong thing). **2. Clear the four gates in order, with their pass criteria** (§Gates: G1 names the
+deliverable form in one testable sentence *before* any work, G2 the machine's real capability, G3 the
+code location, G4 baseline and control — "I understand the idea" is not clearing one). **3. A symptom
+you cannot explain is a stop signal** — search §Symptom index for the shape *before your next attempt*
+and load the row's file; those rows cost hours precisely because the answer was already written down.
+**4. Two strikes on one shape of attempt → back to classification**, not a third variant
+(§Stop conditions), and never report done without §What "done" means.
+
 ## How to use this file
 
 This file is a **procedure with gates**, not background reading. Three things are mandatory:
@@ -124,7 +139,9 @@ and de-obfuscation (`native-dbi-and-deobfuscation.md`) · protocol reversing bey
 (`kernel-and-environment-hardening.md`) · split APK / App Bundle sets (`split-apk.md`) · schema-free
 protobuf decoding (`protocol-reverse.md`) · Dex-VMP differential analysis
 (`vmp-differential-analysis.md`) · kernel-module templates and their version gate
-(`kernelsu_syscall_mask.py`) · working from the phone itself (`on-device-tooling.md`).
+(`kernelsu_syscall_mask.py`) · working from the phone itself (`on-device-tooling.md`) · publishing what
+you learned without publishing the target, and reading a graded precedent before repeating work
+(`desensitization-and-leak-scans.md`, `scripts/scan_leaks.py`, `precedents/`).
 
 **Dependencies this skill does not ship** — the Dart AOT workflow needs a snapshot dump this skill
 cannot produce, and naming which front end you used matters. Details:
@@ -191,6 +208,8 @@ unread in this repository.
 | Deleting a library fixes validation but yields `UnsatisfiedLinkError: dlopen failed: library "X" not found` | `code-virtualization-and-custom-linkers.md` §the deadlock that eats hours |
 | Whole classes appear as bare `native` declarations with no body | `java2c-and-jni-sinking.md` — read it **before** dumping memory: if this is Java2C there is no DEX to find, at any point in the process lifetime. A handful of `native` methods in an otherwise ordinary dex is JNI sinking, not this |
 | A `Java_*` search over a hardened library returns nothing at all | `java2c-and-jni-sinking.md` §The JNI boundary — why a symbol search fails silently — dynamic registration, or `-fvisibility=hidden`. The check that works is "exports `JNI_OnLoad` and zero `Java_*`" |
+| You are about to publish an evidence file, a transcript or a README that quotes real work | `references/desensitization-and-leak-scans.md` — run `scripts/scan_leaks.py` **before** it is committed; the hit list is a set of lines to look at, and `--show-exempt` is where the wrong suppressions show |
+| A hooking module appears to have run but its log tag is silent, and you are about to record "it never loaded" | `references/precedents/logd-broken-module-never-ran-case-3.md` — a broken `logd` delivers nothing on `logcat` while the module's whole run sits in LSPosed's file log; read both channels |
 | A library's **SONAME does not match its filename** | `code-virtualization-and-custom-linkers.md`, `native-and-so.md` |
 | Your edit had **no effect at all**, with no error | `server-config-and-updates.md` §3 (the value may be server-sent), then `packers.md` §map the validation boundary |
 | Process **hangs** with no crash record, or dies to a `uid 0` killer | `native-tamper-and-suicide.md` §the rule (you probably made a terminate path *not return*) |
@@ -205,6 +224,10 @@ unread in this repository.
 | You took screenshots but drew the conclusion from logs or from the patch itself | `long-task-discipline.md` §captures you never looked at are not evidence |
 | You are about to re-run an experiment whose result you already recorded | `long-task-discipline.md` §long-context decay |
 | A script will not start, or a tool "is missing" | `scripts/doctor.py`, then `toolchain.md` §"not on PATH" is not "not installed" |
+| A hook or probe reports **no events at all**, and you are about to call it detection | `scripts/anti_detect_probe.js` for the environment self-report first, then `detection-and-anti-analysis.md` §Step 3: locating the check — the order of search from Stage 0 |
+| `attach` hangs and then fails **while the process is still in `ps`** | `detection-and-anti-analysis.md` §Step 3 Stage 0 — check for `D` in `/proc/<pid>/stat`, and attach a *different* pid as a one-line control before blaming the target |
+| The app exits with no tombstone, no crash and no ANR record | `detection-and-anti-analysis.md` §Step 3 — a clean self-exit means the check ran before your hooks existed; the branch conditions there say which Stage |
+| A dump region validates as the wrong thing, or an `r--s` view of `base.apk` looks like a dex | `advanced-unpacking.md` §What this route cannot do, and how to tell before you spend the window |
 | Feature-scoped network failure (login/register/pay) while the rest works | `tls-and-cert.md` — do not assume your patch caused it |
 | Everything works but **every signed request fails** after repack | `signature-derived-keys.md` |
 | A re-signed build **runs fine, renders its whole UI and logs no error — but one feature silently never loads**, and `dumpsys`/DNS/logcat show **no request for it at all** (not a rejected request: *no request*) | `code-virtualization-and-custom-linkers.md` §what the native check actually reads — refusing **before** the request is built. Not the row above: "sent and rejected" and "never sent" have different owners |
@@ -456,7 +479,7 @@ Load only what the current step needs.
 | `references/dart-aot.md` | The logic lives in a Dart AOT snapshot (`libapp.so`): pinning the Dart version, building a matching decompiler, the object pool and reference indexing, register/boolean conventions, locating and patching Dart code |
 | `references/native-and-so.md` | Patching in a `.so`, needing code to run before the app's own code, hand-built native payloads that crash inside the linker, or **deciding which library/ABI is actually loaded and executing** |
 | `references/native-tamper-and-suicide.md` | The process dies on its own (no Java stack, or a native crash that looks like a bug); you are about to neutralise a `kill`/`exit`/`abort` path; or a hardened library's sections/function boundaries look wrong |
-| `references/detection-and-anti-analysis.md` | The app fights back: it dies after you attach, refuses to run, detects root/hook/debugger, or your dynamic tool does not work here. **Read the first section before escalating** — the answer is usually to switch to static |
+| `references/detection-and-anti-analysis.md` | The app fights back: it dies after you attach, refuses to run, detects root/hook/debugger. **Cost-first (A/B/C), plus the order of search** (see its Step 3 stage funnel) and when to go static |
 | `references/toolchain.md` | Choosing or invoking tools, something is not installed (including "not on PATH but present on disk"), a tool's output smells wrong, or you need to know which tools exist only as a GUI |
 | `references/ad-removal.md` | Task involves ads, trackers, sponsored cards, splash/interstitial/reward |
 | `references/updates-and-forced-upgrade.md` | The patched build must **keep working over time**; the app has any version check, forced-upgrade dialog, self-update installer, or hot-update/resource channel. Load this for essentially every build you intend to ship. |
@@ -476,8 +499,10 @@ Load only what the current step needs.
 | `references/long-task-discipline.md` | The task will run long, or you are resuming one. Live record, conclusion grading, drift checkpoints, **deliverable-form drift (rooted-only vs shippable)**, bound-your-waits, **captures-you-never-looked-at**, **long-context decay**, handover |
 | `references/pitfalls.md` | Always worth a skim before building. This is the failure catalogue. |
 | `references/coverage-and-limits.md` | You need to weigh a claim before trusting it: the evidence behind each covered item, the dependencies this skill does not ship, and the record of what was never exercised |
+| `references/desensitization-and-leak-scans.md` | You are about to publish anything derived from real work — evidence, a transcript, a README — or a leak scan reports a hit: what must be desensitised versus kept, the do-not-anonymize list, and how the scan gates a commit |
+| `references/precedents/` | You are about to do a kind of work this repository has already converged on — a hardened Flutter target, a zero-event trace, a module whose log is silent, an equal-length patch taken to the device. Positive cases with graded evidence and dead ends |
 | `references/handoff-boundaries.md` | A routing decision is about to cross into another discipline: the JNI form table, the packer-versus-loader split, and what "verified" means for each of G1's four deliverable forms |
-| `references/advanced-unpacking.md` | **The dump landed but the bodies are empty** (an extraction shell), or bodies decode as private opcodes (a real VMP): measuring the stub ratio, why FART's hooks died on Android 12-16, the root-side dump, and where recovery stops |
+| `references/advanced-unpacking.md` | **The dump landed but the bodies are empty** (an extraction shell), or decode as private opcodes: the stub-ratio measurement, why FART's hooks died on Android 12-16, the root-side dump, its **boundary**, the layered descent, and where recovery stops |
 | `references/lsposed-and-modules.md` | The client-side logic is reachable but **a rebuilt APK is refused**: delivering a system-level hook module instead, its gradle-free build chain, scope configuration and verification, and the layer a Java module cannot reach |
 | `references/emulation-and-rpc.md` | You need to **call** a routine rather than change the app — a signing routine, a token, a cipher: emulated execution (Unidbg/Unicorn) with its environment-filling cost, versus service-ifying the live function over Frida RPC |
 | `references/native-dbi-and-deobfuscation.md` | A native function is an OLLVM state machine, or you need instruction-level execution evidence: Stalker traces, the trace-to-CFG route, the Stalker/QBDI/emulation decision, and the **measured** zero-event and crash boundaries |
@@ -541,3 +566,6 @@ All scripts are parameterized and path-agnostic; pass paths explicitly. Run `--h
 | `scripts/protobuf_decode_raw.py` | **Schema-free protobuf decode**: hex / file / stdin to a JSON tree, every length-delimited field as a candidate set with ties labelled; `--reencode --check` for a byte-exact round trip |
 | `scripts/vmp_diff_harness.py` | Differential hardening for Dex-VMP: build a labelled opcode-coverage fixture (**218 of 224 opcodes, measured**), derive a candidate private-opcode map from an original/hardened dex pair, verify it in a closed loop, render smali |
 | `scripts/kernelsu_syscall_mask.py` | Generate a KernelSU/APatch syscall-masking scaffold: an installable userspace module plus KPM/LKM/eBPF kernel-side templates, each with its version gate and an explicit unverified label. **A userspace module cannot change a syscall return value** |
+| `scripts/scan_leaks.py` | Scan a repository for target identity before it is published: bundle ids in manifest/`pm`/`ps` contexts, serial-shaped tokens, PATs, inline appkey assignments, literal endpoints, host user paths. Built-in do-not-anonymize exemptions, context-bearing findings, `--show-exempt` prints why a hit was suppressed, `--fail-on strong\|any`, exit 0/1/2 with a `RESULT=` token |
+| `scripts/svc_scan.py` | Name the syscall behind an inline `svc` and the segment it sits in — which decides whether a libc-level hook can observe the call at all. `--context` shows neighbours, because a byte scan also matches data |
+| `scripts/anti_detect_probe.js` | Observer-only probe (patches nothing): path/loader/thread/kill hooks with **caller module + offset**, an environment self-report (`TracerPid`, frida-named mappings), and live streaming so a sub-second target still yields evidence |

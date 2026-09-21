@@ -25,6 +25,7 @@ On the root README:
 import ast
 import os
 import re
+import re
 import subprocess
 import sys
 
@@ -235,6 +236,66 @@ def check_readme():
         print('  BARE PATH %s' % m.group(0))
 
 
+def check_leaks():
+    """No target identity on the committed surface.
+
+    Path resolution, anchors and layout are all *structural* checks: they pass on a file that names
+    a live app and a real phone. This one reads content, and it is deliberately not reimplemented
+    here -- `scripts/scan_leaks.py` owns the rules and their exemption list, so there is one place
+    to argue with. The tracked-file list is passed in so a git-ignored work area (which may
+    legitimately hold real identifiers) can never produce a finding.
+
+    A scanner error is reported as a note rather than a failure: an unreadable rule table is a
+    broken tool, not a leak, and conflating the two teaches people to ignore this line.
+    """
+    scanner = os.path.join(SKILLS_DIR, 'apk-reverse', 'scripts', 'scan_leaks.py')
+    if not os.path.isfile(scanner):
+        print('  SKIP no scan_leaks.py (the leak gate is not installed)')
+        return
+    import subprocess
+    import tempfile
+    proc = subprocess.run(['git', 'ls-files'], cwd=ROOT, capture_output=True, text=True)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        print('  SKIP git ls-files unavailable (not a checkout?)')
+        return
+    with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False, encoding='utf-8') as fh:
+        fh.write(proc.stdout)
+        listing = fh.name
+    try:
+        run = subprocess.run([sys.executable, scanner, '--root', ROOT,
+                              '--files-from', listing, '--max', '10'],
+                             capture_output=True, text=True)
+    finally:
+        os.unlink(listing)
+    token = (run.stdout or '').strip().splitlines()
+    token = token[-1] if token else ''
+    if run.returncode == 2 or 'RESULT=error' in token:
+        print('  NOTE scan_leaks.py could not complete: %s' % (run.stderr or '').strip()[:160])
+        return
+    if run.returncode == 0:
+        print('  no strong target identity on the tracked surface (%s)' % (token or 'RESULT=clean'))
+        return
+    # Non-zero: report the findings, which carry their own context. The scanner prints each hit as
+    # "<file>:<line>:<col>  [<category>/<strength>]  <rule>", followed by its indented match/context
+    # lines. The list below keeps only the strong hits -- a weak hit is the scanner's business, not
+    # this gate's -- but a weak hit sitting between two strong ones may contribute its context pair,
+    # because attributing an indented line to the hit above it is heuristic. The exit code is the
+    # verdict; this block is for the reader.
+    print('  LEAK scan_leaks.py reported strong findings on the tracked surface:')
+    keep_detail = False
+    for line in (run.stdout or '').splitlines():
+        stripped = line.strip()
+        if re.search(r'\[(package|device|token|appkey|path)/(strong|certain)\]', stripped):
+            print('    %s' % stripped)
+            keep_detail = True
+        elif stripped.startswith('[') and stripped.count(']') >= 2:
+            keep_detail = False
+        elif keep_detail and (stripped.startswith('match:') or stripped.startswith('context:')):
+            print('      %s' % stripped)
+    fail.append('leak scan: strong target identity on the tracked surface '
+                '(run: python skills/apk-reverse/scripts/scan_leaks.py)')
+
+
 def main():
     skills = discover_skills()
     print('== skills discovered ==')
@@ -260,6 +321,9 @@ def main():
 
     print('\n== README paths are explicit and exist ==')
     check_readme()
+
+    print('\n== tracked surface carries no target identity ==')
+    check_leaks()
 
     print('\n== result: %d problem(s) ==' % len(fail))
     for f in fail:

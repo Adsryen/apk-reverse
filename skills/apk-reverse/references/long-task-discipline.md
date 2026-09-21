@@ -56,6 +56,32 @@ Most long-task damage comes from hypotheses drifting upward into "facts" simply 
 you catch yourself referring to something as established, check the grade in the record. If it is not
 observed, go observe it or label it again.
 
+## Every script answers with a token, not with prose
+
+A long task is a chain of decisions, and each decision reads the *result* of the step before it. When
+that result is human-readable prose, the reading step becomes an interpretation — and the
+interpretation is where a wrong conclusion enters with no error message attached. This repository has
+already paid for it once: a `logcat`-only verdict concluded that a hooking module never ran, and the
+module had run nine times.
+
+So a script in this kit ends with a machine-decidable answer, and the exit code carries the same
+meaning:
+
+- **A final `RESULT=<token>` line**, from a small closed vocabulary (`clean`, `patched`, `success`,
+  `crash`, `timeout`, `unavailable`, …). The token is the answer; everything before it is evidence for
+  a human.
+- **Exit codes with fixed meaning**: `0` the token names success, `1` a real negative finding, `2` the
+  script could not do its job (usage, unreadable input, missing dependency). **A `2` is never a
+  finding about the target** — that distinction is the whole point, and conflating it turns a broken
+  harness into a property of the app.
+- **Counts as tokens too** where a count is the measurement (`PROBE_COUNT=`, `VULN_COUNT=`,
+  `events=0`), so "nothing happened" is a value you can branch on rather than an absence you have to
+  notice.
+
+The rule for the reader is the other half: **decide from the token and the exit code, and only then
+read the prose.** When the two disagree, the token is what the script's author defined and the prose
+is what they were thinking that day.
+
 ## Single-variable discipline across the whole task
 
 The most common source of a wrong *and durable* conclusion is a compound experiment: two changes, one

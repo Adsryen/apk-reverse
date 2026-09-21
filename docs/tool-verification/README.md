@@ -70,6 +70,21 @@ those are called out in the matrix rather than buried here.
 | `EXTENSION-split-apk.md` | Two real split sets through both branches: unified re-signing, the merge that is refused by design, the merge that succeeds, and the signer chain this host actually needs |
 | `EXTENSION-protobuf-raw.md` | A schema-free decoder cross-checked against the official runtime and a real DataStore container, with the packed-boundary and proto3-zero ambiguities reproduced on real bytes |
 
+## Absorption-pass record
+
+A later pass absorbed mechanics from external skill repositories (`reverse-skill`,
+`awesome-game-security`, `android-reverse-engineering-claude-skill`, `MobileRE-Skill`), keeping each
+project's own discipline: only the phase, the checklist and the command pattern cross over, with the
+source URL and the access date recorded, and nothing vendored as a runtime dependency. These files
+live here rather than in the skill because two of them corrected a claim the repository had already
+written down.
+
+| File | Covers |
+|---|---|
+| `EXTENSION-desensitization.md` | The leak scanner's rules and exemptions, its four `RESULT=` states and exit codes, the escaping false positives, and **the pass that found its own evidence file leaking 26 strong hits** — the fixture's literal match values, quoted to prove the rules fire |
+| `EXTENSION-dart-aot-formats.md` | Two string-table claims tested against a real dual-ABI Flutter app: the arm64 packed scheme confirmed against literal tag bytes, and the assumed armv7 `len*2`/UTF-16 form **refuted** — the 32-bit record is `[header u32][byte-count u32le][UTF-8]`, and the extractor's zero is a format mismatch rather than an empty table |
+| `EXTENSION-detection-pipeline.md` | Naming the check that fires: three arms on a public MASTG target (control alive, probe arm dead in ≈300 ms via `strstr("frida")`, with the `TracerPid=0` versus 4-frida-mappings asymmetry), `svc_scan.py`'s two decoders agreeing on an identical 214-site set, the layered Java-to-svc descent, and the ptrace-free dump boundary on targets whose dex is deflated inside the APK |
+
 ## Adding a run
 
 Record the tools, versions and exact commands, and label each claim. Keep target-specific facts out:

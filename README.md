@@ -99,6 +99,13 @@ measurements.
 - Working a **real Dex VMP** with the known-plaintext differential — which links can be automated and
   which cannot, what a compiled fixture can and cannot reach, and how to *prove* a derived
   private-opcode table instead of asserting one.
+- **Publishing what it learns without publishing the target** — a scanner that reports identity
+  shapes with their context, an explicit list of what must *not* be redacted (tools, libraries,
+  protocol fields, CVEs, hardening products, public crackmes) because redacting those destroys the
+  reusable part, and exit codes that gate a commit.
+- Reading a **precedent** before repeating work this repository already converged on: the positive
+  half of the record, with the route including its dead ends, a grade on every assertion, and the
+  files the case says to write back to.
 
 ## Structure
 
@@ -193,6 +200,12 @@ references/               loaded on demand, one topic each
   environment.md              device/emulator setup, root, ADB, offline devices, log signals,
                               emulator console control and recovery, preflight, look-at-the-screen
   verification.md             the claim ladder; what "done" means
+  desensitization-and-leak-scans.md
+                              publishing discipline: what must be desensitized and what must stay,
+                              the do-not-anonymize list, the leak scanner and its exit states, and
+                              the entry-point file as a prompt surface
+  precedents/                 the positive case library: route including dead ends, a grade per
+                              assertion, measured pit-falls, and the write-back checklist
   pitfalls.md                 the failure catalogue -- read before building
   advanced-unpacking.md       the dump landed but the bodies are empty: extraction-shell diagnosis by
                               trivial-body ratio, FART-style active invocation and why its classic hooks
@@ -228,6 +241,12 @@ references/               loaded on demand, one topic each
                               automated and which cannot (the upload is the bottleneck), the coverage a
                               compiled fixture can reach, how to *prove* a derived private-opcode
                               table, smali generation, and when the route is closed
+  coverage-and-limits.md      the claim ladder applied to the skill itself: the evidence behind each
+                              covered item, the dependencies this skill does not ship, and what was
+                              never exercised
+  handoff-boundaries.md       where this skill ends and another discipline begins: the JNI form
+                              table, the packer-versus-loader split, and what "verified" means for
+                              each of the four deliverable forms
 scripts/                  parameterized, path-agnostic
   doctor.py                   run this first: capability report + per-script runnability, finds
                               tools installed off-PATH or as runnable jars, and surfaces the
@@ -330,6 +349,19 @@ scripts/                  parameterized, path-agnostic
   kernelsu_syscall_mask.py    generate a KernelSU/APatch syscall-masking scaffold: an installable
                               userspace module skeleton plus KPM/LKM/eBPF kernel-side templates, each
                               with its version gate and an explicit unverified label
+  scan_leaks.py               scan a repository for target identity before publishing it: bundle ids
+                              in manifest / `pm` / `ps` contexts, serial-shaped tokens, PATs, inline
+                              appkey assignments, literal endpoints, host user paths. Exemptions for
+                              everything that must stay (tools, libraries, CVEs, hardening products,
+                              public crackmes, placeholders), findings carry their context,
+                              `--show-exempt` prints why a hit was suppressed, exit 0/1/2
+  svc_scan.py                 name the syscall behind an inline `svc` and the segment it sits in,
+                              which decides whether a libc-level hook can observe the call at all;
+                              `--context` shows neighbours because a byte scan also matches data
+  anti_detect_probe.js        observer-only Frida probe (patches nothing): path/loader/thread/kill
+                              hooks with caller module + offset, an environment self-report
+                              (`TracerPid`, frida-named mappings), and live streaming so a sub-second
+                              self-destructing target still yields evidence
 ```
 
 ## Install
@@ -454,7 +486,10 @@ Four tools live at the root and are not part of the installed skill:
 
 ```
 check_repo.py      every skill discovered, frontmatter valid, scripts runnable,
-                   documented paths resolve, README paths explicit and existing
+                   documented paths resolve, README paths explicit and existing,
+                   and -- on the tracked surface only -- no target identity
+                   (delegates the rules to skills/apk-reverse/scripts/scan_leaks.py so
+                   there is one place to argue with the exemption list)
 check_refs.py      every cross-reference that names a section of another
                    document reaches a real heading in that document
 check_budget.py    keep the always-loaded part from creeping: narrative lines in

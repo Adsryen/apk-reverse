@@ -28,7 +28,12 @@ end to end: 17 ART dex mappings exported from `/proc/<pid>/mem`, page-alignment 
 included, validated with `scripts/dex_dump_validate.py`; the evidence, the device-shell
 traps and the throughput numbers are recorded in
 `docs/tool-verification/EXTENSION-rootdump.md`. The `frida-dexdump` refusal that
-motivates that section is in `docs/tool-verification/EXTENSION-device-run.md`. The
+motivates that section is in `docs/tool-verification/EXTENSION-device-run.md`. A later
+pass added the route's **negative boundary** — what it yields nothing against, and how
+to tell before spending a process window — plus the reproducibility check between read
+paths and the layered-descent table; those are measured on the clean MASTG targets and
+on a hardened sample, with commands and hashes in
+`docs/tool-verification/EXTENSION-detection-pipeline.md`. The
 FART/active-invocation half of the file is still **inferred** — no extraction-shell
 target has been spliced end to end here, and the two candidate samples shipped in
 `repos/CyReverse` turned out not to be extraction shells at all (their two "shell"
@@ -381,6 +386,125 @@ loaded ART dex while the observer watched — which is the honest boundary of ev
   independently; the `code_off` cross-check and the class-count sanity check in
   §Measuring extraction are what catch that, not the magic search.
 
+### What this route cannot do, and how to tell before you spend the window
+
+The sections above are the how. This is the boundary, and it is worth reading *before*
+the first export, because the failure is silent: you export a region, it validates as
+something else, and the conclusion "the payload is not resident" is drawn from a wrong
+capture. Two measured obstacles and one measured non-obstacle.
+
+**A dex that is still compressed never materialises as an image.** `dexopt` can only
+map a dex directly when the archive stores it uncompressed, so for an APK whose
+`classes.dex` is stored with **deflate** the method never applies — and nothing in
+memory is a whole dex. Measured on the clean MASTG targets (`owasp.mstg.uncrackable1`,
+`owasp.mstg.uncrackable3`, both with `classes.dex` at `compress_type=8` in the
+*on-device* APK): **zero** `[anon:dalvik-classes.dex extracted in memory from …]`
+mappings across ~2,400 map lines each, i.e. `named_dex=0`. There was nothing to
+export, and the route's negative says nothing about those targets being protected.
+
+**An `r--s` view of `base.apk` is not a source of dex bytes.** Both targets showed
+exactly that shape — a read-only shared mapping of the APK — and it is the shape that
+looks like an answer and is not one. Exported and compared byte-for-byte with the same
+offset in the file:
+
+| View | Compared with | Result |
+|---|---|---|
+| `76dfb14000-76dfb15000` (L1, file offset `0x11000`, 4 KiB) | the APK at `0x11000` | **identical** (sha256 `74846b8c…` both) — it is the APK's own bytes, and at that offset they are the ZIP *central directory* (`PK\x01\x02`), not a dex |
+| `765a89c000-765a8de000` (L3, file offset `0x6000`, 264 KiB) | the APK at `0x6000` | **identical** (sha256 `2eafd7cc…` both) |
+| `76dc28e000-76dc299000` (L3, file offset `0x15a000`, 44 KiB) | the APK at `0x15a000` | **different** — and the reason is not tampering: the mapping range runs *past the end of the file* (offset `0x15a000` > 1,460,555 B), so the file-side read is short and the two hashes describe different byte counts |
+
+Two things follow, and the second one generalises. First, **the two read paths agree
+exactly whenever they cover the same bytes** — `/proc/<pid>/mem` and a straight file
+read returned identical sha256 on both full-length comparisons, which is the
+reproducibility check worth running before treating any capture as evidence. Second,
+**when they disagree, compute the length before suspecting the target**: a VMA can
+legitimately extend beyond its backing file, and "the bytes differ" then means "you
+compared different amounts of data", not "something rewrote the file".
+
+**The non-obstacle, measured:** when the instrumentation route is refused, nothing here
+needs fixing — root reads `/proc/<pid>/mem` with no `ptrace` and no agent, and on the
+test device that produced 17 real, parseable dex images from a hardened process
+(`docs/tool-verification/EXTENSION-rootdump.md`). The correction this pass adds is
+narrower than that claim: **the route's yield is a property of the target, not of the
+route.** It yields everything the packer leaves as a whole image; it yields nothing
+against a target whose dex never becomes one.
+
+### Is this dex image real? Two independent readers, or a claim you have not earned
+
+The route above produces candidate images; something else has to judge them, and the
+judgement has to come from a reader you did not write. A single reading of a hard problem
+is not evidence, and this file already carries the lesson in the opposite direction —
+`§Establish "the bodies do not decode" with a decoder you did not write` is the case where
+a hand-written decoder *invented* a finding.
+
+Three checks, in increasing cost:
+
+1. **Two read paths over the same bytes must agree byte-for-byte.** `/proc/<pid>/mem` at
+   `(start, start+size)` versus the file or a second export. Measured above: identical
+   sha256 on every comparison that covered the same length. Do this **before**
+   interpretation — a capture that cannot be reproduced is not a capture.
+2. **A producer you did not write must parse it.** `dexdump`
+   (`E:\tools\android-14\dexdump.exe`), `baksmali` or `jadx` — and quote *its* failure
+   count, not your own parser's. `scripts/dex_dump_validate.py` ranks and screens
+   candidates; it does not decide whether a body is real dalvik.
+3. **Only then interpret** `stub%` / `emptied%` / class counts, per
+   §Measuring extraction instead of guessing.
+
+**Cross-checking two dumpers is only meaningful when both produce the same artifact.** A
+byte-identity comparison is a real check between two implementations reading the same
+address space (`/proc/<pid>/mem` versus `process_vm_readv(2)`, or two independent export
+tools); it is an empty check between a whole-image dump and a per-method `code_item`
+harvest, because those are different artifacts and a byte difference says nothing about
+either. State which kind of comparison you ran. A *cross-tool* agreement also does not
+prove recovery: on a shell that stubs bodies, two agreeing dumps are two copies of the
+same skeleton — which is why check 2's parse count and §Measuring extraction's ratios
+both have to pass.
+
+## Layered descent: Java → JNI → Native → libc → syscall
+
+**Read this when an upper layer has gone silent.** "My hook produced no events" is not a
+finding about the target until you know which layer is capable of seeing the code that
+runs. The upper layers are cheaper and more informative, so the order is deliberate; the
+mistake is skipping down for reassurance instead of on a signal.
+
+| Layer | What it sees | What it cannot see | The signal to descend |
+|---|---|---|---|
+| **Java** (framework hooks) | methods, objects, arguments — the algorithm in its readable form | anything the app does in a library; anything the framework compiled out of reach | no invocation ever fires, or only the first call and then nothing |
+| **JNI boundary** | argument and return values of a *named* export; the boundary itself | argument *meaning*; any logic past the call | outcomes are correct but you cannot see why |
+| **Native, named exports** (`Module.findExportByName`) | entries of exported functions; the call site that reached them | the function body's control flow (that is `native-dbi-and-deobfuscation.md`) | correct answers, opaque body; a `.so` that never calls its own exports |
+| **Native, internal** (module base + offset) | code with no symbol at all | how you found the offset in the first place | a library whose exports are a thin shell over internal work |
+| **libc** (`open`, `read`, `mmap`, `strstr`, `pthread_create`, `exit`, …) | every call that *goes through* libc, with caller attribution | calls that do not; anything above libc | an event count that contradicts observed effects |
+| **`svc #0` sites** | nothing at runtime until you patch the site — it is a *static* layer | kernel-side: unreachable here, see the gate below | libc shows no such syscall while the effect happens |
+
+Three rules that keep the descent honest:
+
+- **Descending is cheap to state and expensive to trust.** A lower layer has less
+  context, so an event there needs *more* support to mean something: `open()` fired says
+  nothing on its own, while `open()` with a caller of `libX.so+0x1cef8` names a detector.
+  Always carry the caller offset down, or you have traded meaning for volume.
+- **The bottom is static, not dynamic.** Below libc there is nothing to hook — a
+  `svc #0` site is found by scanning the library (`scripts/svc_scan.py`) and changed by
+  patching bytes. Measured: the ROM's `libc.so` carries exactly **4** termination sites
+  (`exit`, `exit_group`, `kill`, `tgkill`) and those are libc's own exported
+  implementations, which is *why* a libc hook sees callers at all; the same scan on a
+  shell library returned 21 byte-scan "sites" that were all data (no syscall-number load
+  near any of them). Read the neighbours before believing a count.
+- **"Down" does not mean "more capable".** Measured on a real target, the decisive
+  detection ran at the **libc** layer — `strstr("frida")` at ~300 ms of process life,
+  followed within milliseconds by a clean self-exit with no tombstone — while the code
+  that recovered the caller chain sat in **JIT-compiled** runtime output, i.e. a
+  *higher* layer that has no file offset. The layers are not a ladder of access; they are
+  different observation points, and the useful one is wherever the target's check
+  happens to be.
+
+**The kernel layer is not reachable on this device, and the gate is a kernel version.**
+eBPF tracing (`stackplz`, kprobes, `seccomp` filters pushed from userspace) requires
+kernel **5.10+**; the measured device is **4.14.186**, so that entire layer is closed
+here regardless of tooling. `kernel-and-environment-hardening.md` maps the route and its
+version gate; do not spend a session on the layer before checking `adb shell uname -r`.
+The consequence for this file: the descent above stops at the `svc` boundary, and a check
+that runs *inside* the kernel is out of reach of both dynamic and static userspace work.
+
 ## The honest boundary: real Dex VMP
 
 The last shape is the one to say out loud: if the dump's method bodies are intact but
@@ -459,6 +583,11 @@ for the island itself.
 | Dumper runs, output dir empty | Storage path + `open()` check, then entry-type probe | §Why the classic hooks die on Android 12-16 |
 | App dies under the invoker | Shell counter-measures; narrow the force list | §Why the classic hooks die on Android 12-16, and `detection-and-anti-analysis.md` |
 | frida attach refused (`script has been destroyed`) | Root-side `/proc/<pid>/mem` dump, atomic inside one process lifetime | §Dumping when frida is refused |
+| Target has no `[anon:dalvik-classes…]` mapping at all (`named_dex=0`) | Its dex is compressed and never becomes a whole image — the route has nothing to export here; this is not evidence of protection | §What this route cannot do, and how to tell before you spend the window |
+| An `r--s` view of `base.apk` looks like a dex region | Compare it with the file at the same offset and check the length: it is the APK's own bytes (often the ZIP central directory), and a range may exceed the file | §What this route cannot do, and how to tell before you spend the window |
+| Two captures of the same address differ | Compare byte *lengths* first; a VMA can extend past its backing file | §What this route cannot do, and how to tell before you spend the window |
+| A hook on the upper layer stops firing | Descend one layer on a named signal, not for reassurance, and carry the caller offset down | §Layered descent: Java → JNI → Native → libc → syscall |
+| The effect happens but libc shows no such syscall | Static: scan the library for an inline `svc` site before assuming evasion | §Layered descent: Java → JNI → Native → libc → syscall |
 | Sample self-exits and restarts with no instrumenter present | The packer's own check, not your hook; shorten every step to one lifetime | §Dumping when frida is refused |
 | Methods are `native` stubs with a `Java_*` export | JNI sinking — read the function in the `.so` | `java2c-and-jni-sinking.md` |
 | Bodies present, decode as nonsense | Real VMP — **but confirm with `dexdump` first**, then differential oracle or walk away | §Establish "the bodies do not decode" with a decoder you did not write |
