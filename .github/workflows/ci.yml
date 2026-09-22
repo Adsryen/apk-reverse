@@ -18,13 +18,19 @@
 #     rather than failing. Run it locally after downloading the sample.
 #
 # Coverage is therefore: static structure, documentation anchors, budget, command
-# references, pure parsers, CLI contracts and no-device flows. Nothing more is
-# claimed.
+# references, routing coherence, pure parsers, CLI contracts, typing/style lint and
+# no-device flows. Nothing more is claimed.
 name: ci
 
 on:
   push:
   pull_request:
+#
+# NOTE ON TRIGGERS: no `paths:` filter, deliberately. A filter that watches only
+# `*.py` and the lint configuration would skip the structural gates on exactly the
+# changes they exist to catch -- a reference index or a documented command edited
+# without touching a script. check_refs.py and check_routing.py are documentation
+# gates, so they have to run on documentation commits.
 
 permissions:
   contents: read
@@ -49,7 +55,7 @@ jobs:
       PYTHONUTF8: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -88,3 +94,37 @@ jobs:
       - name: Summarise skipped and expected-failure coverage
         if: always()
         run: python -m pytest -q -ra --no-header -p no:cacheprovider 2>&1 | tail -n 40
+
+  lint:
+    # Static checks over the same tracked surface the local commands cover, so what passes locally
+    # cannot drift from what CI enforces. Both tools read their configuration (mypy.ini, .flake8)
+    # from the repository root automatically.
+    #
+    # The environment is deliberately bare -- only mypy and flake8, none of PyYAML, capstone, tiktoken
+    # or frida. That is the poorest environment the configuration must keep working in, which is what
+    # mypy.ini's ignore_missing_imports overrides exist for: CI exercises the fallbacks instead of a
+    # machine-local install hiding a regression.
+    #
+    # One interpreter, not the matrix: the checks are static, and the matrix's job is runtime
+    # behaviour, which lint does not observe. `check_routing.py` -- a gate the test job also runs --
+    # is deliberately not repeated here.
+    #
+    # Verified locally before being added: on a venv with only mypy and flake8, `flake8` reports 0 and
+    # `mypy` reports "Success: no issues found in 55 source files".
+    name: lint (mypy + flake8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lint dependencies
+        run: python -m pip install --upgrade mypy flake8
+
+      - name: mypy
+        run: mypy *.py skills/apk-reverse/scripts/*.py
+
+      - name: flake8
+        run: flake8 *.py skills/apk-reverse/scripts/*.py
