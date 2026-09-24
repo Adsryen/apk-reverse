@@ -25,7 +25,6 @@ On the root README:
 import ast
 import os
 import re
-import re
 import subprocess
 import sys
 
@@ -46,7 +45,7 @@ NAMED_PATH_RE = re.compile(
 BARE_PATH_RE = re.compile(r'(?<![\w/])(?P<sub>references|scripts)/'
                           r'(?P<file>[A-Za-z0-9_\-]+\.(?:md|py|js))')
 
-fail = []
+fail: list[str] = []
 
 
 def read(path):
@@ -151,8 +150,13 @@ def check_scripts(skill_dir):
             print('  FAIL %s' % name)
             continue
         run = subprocess.run([sys.executable, '-B', path, '--help'],
-                             capture_output=True, text=True, timeout=60,
-                             cwd=ROOT)
+                             capture_output=True, timeout=60, cwd=ROOT,
+                             # Decode explicitly. `text=True` alone uses the *locale* encoding, which
+                             # on a Chinese Windows console is GBK: a script printing an em dash in a
+                             # usage line then fails to decode, and this gate reports it as a crash.
+                             # That is a defect in the gate, not in the script -- measured on this
+                             # repository, where `dex_strpatch.py --help` was reported as crashed.
+                             encoding='utf-8', errors='replace')
         # A script may exit non-zero on --help under the "print usage, exit 2"
         # convention. That is acceptable; a traceback is not.
         crashed = 'Traceback (most recent call last)' in (run.stderr or '')
@@ -193,17 +197,33 @@ def check_references(name, skill_dir, root_docs):
             print('  MISSING %s' % x)
         fail.extend(missing)
 
-    # Reachability: nothing may be orphaned from the skill entry point.
+    # Reachability: nothing may be orphaned from the entry point.
+    #
+    # The registration surface is SKILL.md **plus** `references/routing.md`, because this repository
+    # splits the two: SKILL.md keeps the symptom index (symptom -> file must stay one hop) and the
+    # reference/script inventory lives in the routing file, which `check_routing.py` in turn proves
+    # names every reference and every script. Reading only SKILL.md here would report a correctly
+    # registered file as orphaned -- and did, for every file added after that split.
+    routing = os.path.join(ref_dir, 'routing.md')
     bodies = read(os.path.join(skill_dir, 'SKILL.md')) + root_docs
+    if os.path.isfile(routing):
+        bodies += read(routing)
     for f in sorted(refs):
         if f.endswith('.md') and f not in bodies:
-            fail.append('%s: references/%s is not mentioned anywhere' % (name, f))
+            fail.append('%s: references/%s is named neither in SKILL.md, README.md nor '
+                        'references/routing.md' % (name, f))
             print('  UNLISTED references/%s' % f)
 
     all_docs = bodies
     for f in sorted(refs):
         if f.endswith('.md'):
             all_docs += read(os.path.join(ref_dir, f))
+    for sub in ('', 'coverage', 'precedents'):
+        d = os.path.join(ref_dir, sub) if sub else ref_dir
+        if os.path.isdir(d):
+            for f in sorted(os.listdir(d)):
+                if f.endswith('.md') and os.path.isfile(os.path.join(d, f)):
+                    all_docs += read(os.path.join(d, f))
     for s in sorted(scripts):
         if s.endswith(('.py', '.js')) and s not in all_docs:
             fail.append('%s: scripts/%s is undocumented' % (name, s))
@@ -254,7 +274,8 @@ def check_leaks():
         return
     import subprocess
     import tempfile
-    proc = subprocess.run(['git', 'ls-files'], cwd=ROOT, capture_output=True, text=True)
+    proc = subprocess.run(['git', 'ls-files'], cwd=ROOT, capture_output=True,
+                          encoding='utf-8', errors='replace')
     if proc.returncode != 0 or not proc.stdout.strip():
         print('  SKIP git ls-files unavailable (not a checkout?)')
         return
@@ -264,7 +285,7 @@ def check_leaks():
     try:
         run = subprocess.run([sys.executable, scanner, '--root', ROOT,
                               '--files-from', listing, '--max', '10'],
-                             capture_output=True, text=True)
+                             capture_output=True, encoding='utf-8', errors='replace')
     finally:
         os.unlink(listing)
     token = (run.stdout or '').strip().splitlines()

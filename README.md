@@ -1,3 +1,27 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
+    <img src="assets/banner-light.svg" alt="apk-reverse" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/newliver666/apk-reverse/stargazers"><img src="https://img.shields.io/github/stars/newliver666/apk-reverse?style=flat-square&label=stars&color=49454F" alt="stars"></a>
+  <a href="https://github.com/newliver666/apk-reverse/network/members"><img src="https://img.shields.io/github/forks/newliver666/apk-reverse?style=flat-square&label=forks&color=49454F" alt="forks"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/newliver666/apk-reverse?style=flat-square&color=49454F" alt="license"></a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-49454F?style=flat-square&logo=python&logoColor=white" alt="python">
+  <img src="https://img.shields.io/badge/platform-android-49454F?style=flat-square&logo=android&logoColor=white" alt="android">
+  <a href="https://github.com/newliver666/apk-reverse/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/newliver666/apk-reverse/ci.yml?style=flat-square&label=ci&color=49454F" alt="ci"></a>
+</p>
+
+<p align="center">
+  <a href="#what-it-is-good-at">Capabilities</a> · <a href="#structure">Structure</a> · <a href="#install">Install</a> · <a href="#requirements">Requirements</a> · <a href="#read-this-first">Failure catalogue</a> · <a href="#scope">Scope</a> · <a href="#repository-maintenance">Maintenance</a> · <a href="#disclaimer">Disclaimer</a>
+</p>
+
 # apk-reverse
 
 An Agent Skill for Android APK reverse engineering, debloating, ad removal, surgical
@@ -206,6 +230,25 @@ references/               loaded on demand, one topic each
                               the entry-point file as a prompt surface
   precedents/                 the positive case library: route including dead ends, a grade per
                               assertion, measured pit-falls, and the write-back checklist
+  routing.md                  the on-demand inventory: every reference with when to load it, every
+                              script with what it does, and a mirror of the symptom index
+  rasc-and-droidsaw.md        the Rust re-implementation of the ASC indexer: measured speedup and
+                              identical class sets, the enum shape where it silently drops bodies,
+                              and how to build and verify it
+  evidence-summary.md         the condensation that ships with the skill: capability, one-line
+                              conclusion, strength, and the evidence you can actually open in an
+                              installed copy
+
+  ../evals/                   NOT a spec directory either, but the location the Agent
+                              Skills guidance recommends: `evals.json` holds the
+                              with-skill / without-skill cases this skill has **not** run,
+                              with the method for running them written into the file
+  ../evidence/                NOT a spec directory: the machine-readable companions to the evidence
+                              summary reference above -- `capability-matrix.json` (the same rows with
+                              more fields), `tested-tool-versions.json` (versions and the probe behind
+                              each), `known-limitations.md` (the installer-facing limit list). Shipped
+                              inside the skill so an installed copy can answer "was this verified, and
+                              how strongly" without the repository
   pitfalls.md                 the failure catalogue -- read before building
   advanced-unpacking.md       the dump landed but the bodies are empty: extraction-shell diagnosis by
                               trivial-body ratio, FART-style active invocation and why its classic hooks
@@ -349,6 +392,9 @@ scripts/                  parameterized, path-agnostic
   kernelsu_syscall_mask.py    generate a KernelSU/APatch syscall-masking scaffold: an installable
                               userspace module skeleton plus KPM/LKM/eBPF kernel-side templates, each
                               with its version gate and an explicit unverified label
+  rasc_build.py               build and verify rasc, the Rust ASC re-implementation:
+                              --check what is present, --build clone plus cargo, --verify an APK
+                              against droidasc and fail on any class-set difference
   scan_leaks.py               scan a repository for target identity before publishing it: bundle ids
                               in manifest / `pm` / `ps` contexts, serial-shaped tokens, PATs, inline
                               appkey assignments, literal endpoints, host user paths. Exemptions for
@@ -363,6 +409,11 @@ scripts/                  parameterized, path-agnostic
                               (`TracerPid`, frida-named mappings), and live streaming so a sub-second
                               self-destructing target still yields evidence
 ```
+
+The repository also carries an **executable** test layer, which is a different thing from the
+evidence record: `tests/` asserts what the scripts do (unit, CLI contract, no-device
+integration) and `tests/benchmark.md` records what a route did on a real target. `tests/README.md`
+states the split, and `.github/workflows/ci.yml` runs the gates plus the suite.
 
 ## Install
 
@@ -421,6 +472,11 @@ an install that `PATH` does not know about (the common case for `apksigner` and
 `keytool`).
 
 ## Read this first
+
+**This project is published for learning, research and authorized security testing only.** It ships
+no exploit payloads, no target data and no third-party binaries — it is a method, a set of scripts
+and an evidence record. You are responsible for having the right to analyze whatever you point it at;
+see **Disclaimer** at the end of this file.
 
 `skills/apk-reverse/references/pitfalls.md`. It is the most valuable file here — every entry is a
 failure that produced a broken artifact while looking completely healthy.
@@ -488,14 +544,21 @@ Four tools live at the root and are not part of the installed skill:
 check_repo.py      every skill discovered, frontmatter valid, scripts runnable,
                    documented paths resolve, README paths explicit and existing,
                    and -- on the tracked surface only -- no target identity
-                   (delegates the rules to skills/apk-reverse/scripts/scan_leaks.py so
-                   there is one place to argue with the exemption list)
+                   (delegates the rules to skills/apk-reverse/scripts/scan_leaks.py
+                   so there is one place to argue with the exemption list)
 check_refs.py      every cross-reference that names a section of another
                    document reaches a real heading in that document
-check_budget.py    keep the always-loaded part from creeping: narrative lines in
-                   SKILL.md (index lines counted separately, because one line per
-                   bundled file is the price of discoverability), index-row length,
-                   and conclusions restated outside their legitimate homes
+check_routing.py   the on-demand inventory still matches the entry point: the
+                   symptom mirror agrees with SKILL.md, every reference file is
+                   named in skills/apk-reverse/references/routing.md, and every
+                   script is too
+check_commands.py  every command a document tells you to run is checked against
+                   the script's own argparse table -- a documented flag that does
+                   not exist is a drift the anchor checks cannot see
+check_budget.py    keep the always-loaded part from creeping: SKILL.md's whole
+                   body (index lines included, because they load too) measured in
+                   lines and tokens, index-row length, long files with no
+                   navigable head, and hedged rules reported as a trend
 build_scripts.py   audit for machine-specific leftovers (absolute paths, credentials)
 ```
 
@@ -513,3 +576,37 @@ for one measurement pass against a real target: what each script actually did, w
 method confirmed it, which defects were found, and which scenarios the target could not exercise.
 It exists so the **Coverage** claims in `SKILL.md` can be checked against runs instead of trusted,
 and so the gaps are written down where the next person will find them.
+
+---
+
+Proudly supported by the [LINUX DO](https://linux.do) community.
+
+## Disclaimer
+
+**For learning, research and authorized security testing only.** Every script, reference and
+recorded result in this repository exists to explain *how* Android application analysis works, so
+that practitioners can reason about the tools they already own. Nothing here is a service, a
+product, or an endorsement of any particular use.
+
+- **Authorized targets only.** Use this on applications you own or have been explicitly permitted to
+  analyze, on public CTF/challenge material, or in a sandbox you control. Analyzing software you have
+  no right to analyze may be unlawful where you live, and that determination is yours to make, not
+  this repository's.
+- **No warranty, no fitness for any purpose.** The material is provided *as is*, without warranty of
+  any kind. Results are recorded as they were measured on one machine at one time; nothing here
+  promises that a route will work on your target, your device, your toolchain or today's app version.
+- **Verify before you trust; back up before you act.** Several scripts modify artifacts (dex, APK,
+  `.so`, stored app data) and some operate on a rooted device. Keep your own copies, work on
+  duplicates, and read `SKILL.md`'s gates before running anything against something you care about.
+- **Your use is your responsibility.** The authors and contributors accept no liability for any loss,
+  damage, legal consequence or service interruption arising from the use or misuse of this
+  repository, and are not affiliated with, endorsed by, or acting on behalf of any application,
+  vendor or platform it may be used to examine.
+- **Test data is not distributed here.** Samples, dumps and device artifacts are deliberately absent
+  from the tree (`.gitignore` excludes them) and live only in a local, ignored workspace. Anything you
+  obtain to follow along is yours to keep safe and to delete when you are done with it — follow your
+  local rules and the terms that came with the sample. What this repository *does* publish is the
+  method and the evidence, with all target identity removed.
+- **No affiliation.** Names of tools, libraries, hardening products and public challenge targets
+  appear only to make the material reusable; they belong to their respective owners and this project
+  is not connected to them.

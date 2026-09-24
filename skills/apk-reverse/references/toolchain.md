@@ -32,12 +32,46 @@ cross-check with the program headers.
 |---|---|---|
 | `baksmali` / `smali` (jars) | `java -cp <jars> org.jf.baksmali.Main d <dex> -o <dir>` | round-tripping, reading a method precisely |
 | `dexlib2` | small Java program | method-level rewrite, leaves everything else untouched (`dex-patching.md`) |
-| **`droidasc`** (ASC) | `droidasc findrefs app.apk string <S>` | **the fastest whole-APK cross-reference index** — reach for this FIRST, to *locate*. See below |
+| **`rasc`** (Rust ASC) | `rasc findrefs app.apk string <S>` | **the same index, 4–15× faster**, no Python runtime, a Rust DEX decompiler behind `getclass`. Reach for this FIRST when it is built — its one blind spot is documented in `rasc-and-droidsaw.md` |
+| **`droidasc`** (ASC) | `droidasc findrefs app.apk string <S>` | the original Python index, one `pip install` away, and the cross-check for `rasc`. Reach for it FIRST when `rasc` is not built |
 | **`ddc`** | `ddc app.apk -c <Class>` | **fastest read of dex as Java, plus query subcommands** — reach for this SECOND, to *read*. See below |
 | `apktool` | `java -jar apktool.jar d/b` | whole-app decode including resources |
 | `jadx` | `jadx --no-res -d <out> <apk>` | readable Java for orientation; **not** a source of truth, and **not** a recon entry point (see below) |
 | `aapt2` | `aapt2 dump badging <apk>` | manifest facts, package name, versions |
 | `zipalign`, `apksigner` | from build-tools | alignment and signing |
+
+### rasc — the same index in Rust, when you have built it
+
+`rasc` is the `rust` branch of the same project (`MG1937/ASC`). Same CLI shape — `classes`,
+`manifest`, `getclass`, `findrefs {string,type,method,field}` — no Python at all, and a 2.13 MB
+binary. **Measured on this repository's archives: identical class-definition sets on both a 1.4 MB
+MASTG challenge and a 34.8 MB app (30,768 classes, 0 differences either way), at 4.0–4.7× for
+`classes` and up to 14.7× for `findrefs`.**
+
+It must be built — there is no release asset and no crate — so the kit wraps that:
+
+```bash
+python scripts/rasc_build.py --check            # what is present
+python scripts/rasc_build.py --build            # needs git + rustup; ~2 min
+python scripts/rasc_build.py --verify app.apk   # compares class sets against droidasc, fails on a difference
+```
+
+**It is a registered capability, so G2 does not have to guess:** `doctor.py` reports `dex_index_rust`
+as `OK` when a binary is present (PATH, `APKREV_TOOLS`, or the work-area path `rasc_build.py` builds
+into) and `BLOCKED` with that build command as the next action when it is not — alongside
+`dex_index_python` for the `pip install` route. A machine with neither is not stuck: the Python
+indexer is one command away, and the two are cross-checked against each other by
+`rasc_build.py --verify`.
+
+**The one thing to know before trusting its `getclass`:** on an `enum` whose constants override an
+abstract method, the outer class is printed as a bare constant list and the per-constant bodies are
+**not inlined** — no warning, and none in the Python tool either, because both leave those bodies in
+their own subclasses. They are one query away (`Lpkg/Enum$1;`, and both tools decompile those fully);
+`droidasc`'s outer-class listing is simply richer (2,170 B vs 314 B on the measured class, carrying
+`$VALUES`, `$values()` and the constructors). Sampling 20 app-like classes from a real app, 17 were
+judged by the JADX-parity harness and 16 agreed literal for literal; the one that differed was exactly
+this shape. Use it to *locate* and to read ordinary classes, and read the constants when an enum shows
+no bodies. The measurements and the failing class are in `references/rasc-and-droidsaw.md`.
 
 ### droidasc (ASC) — ask an APK "who references this?", in one query
 
@@ -433,7 +467,7 @@ script, and check the device architecture — the server binary is per-ABI.
 
 **A version mismatch here wastes the most time of any tool in this file.** A Dart decompiler built
 for a different engine version produces output that is subtly wrong rather than obviously broken.
-Pin the version first (`dart-aot.md` §1) and do not "try it and see".
+Pin the version first (`dart-aot.md`) and do not "try it and see".
 
 ## Using the kit's scripts instead of writing your own
 
